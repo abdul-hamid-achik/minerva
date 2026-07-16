@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -27,13 +29,35 @@ type BobContext struct {
 	NextActions []string `json:"next_actions,omitempty"`
 }
 
-// CortexStatus is cortex doctor/version readiness.
+// CortexStatus is cortex doctor/version readiness plus overview/session signals.
 type CortexStatus struct {
 	Version string `json:"version,omitempty"`
 	Ready   bool   `json:"ready"`
 	Detail  string `json:"detail,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Source  string `json:"source,omitempty"`
+
+	// Overview aggregates (cortex overview --json).
+	Sessions       int     `json:"sessions,omitempty"`
+	Active         int     `json:"active,omitempty"`
+	Stale          int     `json:"stale,omitempty"`
+	Completed      int     `json:"completed,omitempty"`
+	Verified       int     `json:"verified,omitempty"`
+	CompletionRate float64 `json:"completion_rate,omitempty"`
+	VerifiedRate   float64 `json:"verified_rate,omitempty"`
+	// StaleSamples are a few active/stale session ids for operators.
+	StaleSamples []CortexSessionSample `json:"stale_samples,omitempty"`
+	// ActiveWorkspace is count of active sessions for the deep-check workspace repo.
+	ActiveWorkspace int `json:"active_workspace,omitempty"`
+}
+
+// CortexSessionSample is a bounded session row for display/suggest.
+type CortexSessionSample struct {
+	ID         string `json:"id"`
+	Goal       string `json:"goal,omitempty"`
+	Phase      string `json:"phase,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	UpdatedAt  string `json:"updated_at,omitempty"`
 }
 
 // MCPHubStats is gateway usage intelligence from mcphub stats + status.
@@ -200,8 +224,14 @@ func normalizeBobActions(actions []string) []string {
 	return out
 }
 
-// ProbeCortex prefers cortex doctor --json; falls back to --version.
+// ProbeCortex prefers cortex doctor --json; falls back to --version,
+// then enriches with overview + optional stale session samples.
 func ProbeCortex(ctx context.Context) *CortexStatus {
+	return ProbeCortexWorkspace(ctx, "")
+}
+
+// ProbeCortexWorkspace is like ProbeCortex but tags active sessions for workspace.
+func ProbeCortexWorkspace(ctx context.Context, workspace string) *CortexStatus {
 	cs := &CortexStatus{}
 
 	if _, err := exec.LookPath("cortex"); err != nil {
@@ -211,33 +241,146 @@ func ProbeCortex(ctx context.Context) *CortexStatus {
 
 	// Prefer doctor for readiness.
 	docCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
 	docCmd := exec.CommandContext(docCtx, "cortex", "doctor", "--json")
 	docOut, docErr := docCmd.Output()
+	cancel()
 	if docErr == nil && len(docOut) > 0 {
-		cs.Source = "cortex doctor --json"
+		cs.Source = "cortex doctor+overview"
 		cs.Ready = true
-		cs.Detail = compactJSONSummary(docOut, 400)
-		// Try version as well.
+		cs.Detail = compactJSONSummary(docOut, 240)
 		if ver := runVersion(ctx, "cortex", []string{"--version"}); ver != "" {
 			cs.Version = ver
 		}
-		return cs
+	} else {
+		ver := runVersion(ctx, "cortex", []string{"--version"})
+		if ver == "" {
+			cs.Error = "cortex doctor and version probes failed"
+			if docErr != nil {
+				cs.Error = fmt.Sprintf("cortex unavailable: %v", docErr)
+			}
+			return cs
+		}
+		cs.Version = ver
+		cs.Ready = true
+		cs.Source = "cortex --version"
+		cs.Detail = "doctor unavailable; version only"
 	}
 
-	ver := runVersion(ctx, "cortex", []string{"--version"})
-	if ver == "" {
-		cs.Error = "cortex doctor and version probes failed"
-		if docErr != nil {
-			cs.Error = fmt.Sprintf("cortex unavailable: %v", docErr)
-		}
-		return cs
-	}
-	cs.Version = ver
-	cs.Ready = true
-	cs.Source = "cortex --version"
-	cs.Detail = "doctor unavailable; version only"
+	// Overview dashboard (workspace-independent).
+	enrichCortexOverview(ctx, cs)
+	// Stale/active samples (bounded).
+	enrichCortexSessions(ctx, cs, workspace)
 	return cs
+}
+
+func enrichCortexOverview(ctx context.Context, cs *CortexStatus) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, "cortex", "overview", "--json")
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return
+	}
+	var ov struct {
+		Sessions           int     `json:"sessions"`
+		Active             int     `json:"active"`
+		Stale              int     `json:"stale"`
+		Completed          int     `json:"completed"`
+		Verified           int     `json:"verified"`
+		CompletionRate     float64 `json:"completionRate"`
+		VerifiedRate       float64 `json:"verifiedRate"`
+		MeanTimeToComplete int64   `json:"meanTimeToCompleteMs"`
+	}
+	if err := json.Unmarshal(out, &ov); err != nil {
+		return
+	}
+	cs.Sessions = ov.Sessions
+	cs.Active = ov.Active
+	cs.Stale = ov.Stale
+	cs.Completed = ov.Completed
+	cs.Verified = ov.Verified
+	cs.CompletionRate = ov.CompletionRate
+	cs.VerifiedRate = ov.VerifiedRate
+	if !strings.Contains(cs.Source, "overview") {
+		cs.Source += "+overview"
+	}
+}
+
+func enrichCortexSessions(ctx context.Context, cs *CortexStatus, workspace string) {
+	// Prefer stale sessions for operator attention.
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, "cortex", "sessions", "--stale", "--json")
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		cctx2, cancel2 := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel2()
+		cmd = exec.CommandContext(cctx2, "cortex", "sessions", "--active", "--json")
+		out, err = cmd.Output()
+		if err != nil || len(out) == 0 {
+			// still try workspace active count below
+		}
+	}
+
+	if len(out) > 0 {
+		var rows []struct {
+			ID         string `json:"id"`
+			Goal       string `json:"goal"`
+			Phase      string `json:"phase"`
+			Repository string `json:"repository"`
+			UpdatedAt  string `json:"updatedAt"`
+		}
+		if err := json.Unmarshal(out, &rows); err == nil {
+			for _, r := range rows {
+				if len(cs.StaleSamples) >= 5 {
+					break
+				}
+				goal := r.Goal
+				if len(goal) > 80 {
+					goal = goal[:80] + "…"
+				}
+				cs.StaleSamples = append(cs.StaleSamples, CortexSessionSample{
+					ID:         r.ID,
+					Goal:       goal,
+					Phase:      r.Phase,
+					Repository: r.Repository,
+					UpdatedAt:  r.UpdatedAt,
+				})
+			}
+		}
+	}
+
+	repo := repoNameFromPath(workspace)
+	if repo == "" {
+		return
+	}
+	cctx3, cancel3 := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel3()
+	cmd3 := exec.CommandContext(cctx3, "cortex", "sessions", "--active", "--repo", repo, "--json")
+	out3, err3 := cmd3.Output()
+	if err3 == nil && len(out3) > 0 {
+		var activeRows []struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(out3, &activeRows) == nil {
+			cs.ActiveWorkspace = len(activeRows)
+		}
+	}
+}
+
+func repoNameFromPath(workspace string) string {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return ""
+	}
+	if workspace == "." {
+		if wd, err := os.Getwd(); err == nil {
+			workspace = wd
+		} else {
+			return ""
+		}
+	}
+	return filepath.Base(filepath.Clean(workspace))
 }
 
 // ProbeMCPHub calls mcphub stats --json and status --json.
@@ -454,7 +597,7 @@ func DeepCheck(ctx context.Context, workspace string) *DeepStackStatus {
 	status := &DeepStackStatus{}
 
 	status.Bob = ProbeBob(ctx, workspace)
-	status.Cortex = ProbeCortex(ctx)
+	status.Cortex = ProbeCortexWorkspace(ctx, workspace)
 	status.MCPHub = ProbeMCPHub(ctx)
 	status.Readiness = ProbeReadiness(ctx)
 	status.computeRetrieval()
@@ -474,10 +617,15 @@ func DeepCheck(ctx context.Context, workspace string) *DeepStackStatus {
 
 	if status.Cortex.Error != "" {
 		parts = append(parts, "cortex: unavailable")
-	} else if status.Cortex.Version != "" {
-		parts = append(parts, fmt.Sprintf("cortex: %s", firstLine(status.Cortex.Version)))
 	} else {
-		parts = append(parts, "cortex: ready")
+		if status.Cortex.Sessions > 0 {
+			parts = append(parts, fmt.Sprintf("cortex: sessions=%d active=%d stale=%d verified_rate=%.1f%%",
+				status.Cortex.Sessions, status.Cortex.Active, status.Cortex.Stale, status.Cortex.VerifiedRate*100))
+		} else if status.Cortex.Version != "" {
+			parts = append(parts, fmt.Sprintf("cortex: %s", firstLine(status.Cortex.Version)))
+		} else {
+			parts = append(parts, "cortex: ready")
+		}
 	}
 
 	if status.MCPHub.Error != "" {

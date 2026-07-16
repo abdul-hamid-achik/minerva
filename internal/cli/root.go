@@ -582,7 +582,23 @@ Sets retrieval_ready only when both codemap and vecgrep are domain-ready.
 			if status.Cortex.Error != "" {
 				fmt.Printf("cortex:  %s\n", status.Cortex.Error)
 			} else {
-				fmt.Printf("cortex:  version=%s source=%s ready=%v\n", status.Cortex.Version, status.Cortex.Source, status.Cortex.Ready)
+				fmt.Printf("cortex:  ready=%v source=%s\n", status.Cortex.Ready, status.Cortex.Source)
+				if status.Cortex.Version != "" {
+					fmt.Printf("         version=%s\n", firstLineCLI(status.Cortex.Version))
+				}
+				if status.Cortex.Sessions > 0 {
+					fmt.Printf("         sessions=%d active=%d stale=%d completed=%d verified=%d\n",
+						status.Cortex.Sessions, status.Cortex.Active, status.Cortex.Stale,
+						status.Cortex.Completed, status.Cortex.Verified)
+					fmt.Printf("         completion_rate=%.1f%% verified_rate=%.1f%%\n",
+						status.Cortex.CompletionRate*100, status.Cortex.VerifiedRate*100)
+				}
+				if status.Cortex.ActiveWorkspace > 0 {
+					fmt.Printf("         active_in_workspace=%d\n", status.Cortex.ActiveWorkspace)
+				}
+				for _, s := range status.Cortex.StaleSamples {
+					fmt.Printf("         stale %s [%s] %s — %s\n", s.ID, s.Repository, s.Phase, s.Goal)
+				}
 			}
 			if status.MCPHub.Error != "" {
 				fmt.Printf("mcphub:  %s\n", status.MCPHub.Error)
@@ -1054,4 +1070,12 @@ func printJSON(v any) error {
 	}
 	fmt.Println(string(data))
 	return nil
+}
+
+func firstLineCLI(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }

@@ -93,6 +93,8 @@ minerva stack deep --stash    # save report to fcheap (minerva-stack, TTL 30d)
 
 MCPHub slice includes **unused_enabled** servers and harness **agents_drift** from `mcphub status --json`. Suggest will propose `mcphub disable <server>` for zero-call enabled servers and flag profile `mcp_servers` that name unknown hub servers.
 
+Cortex slice uses **`cortex overview --json`** (sessions/active/stale/verified rates) plus sample stale sessions and active count for the current workspace. Suggest surfaces stale backlog and low verified rates — it never mutates cortex tasks.
+
 **Binary map (product → PATH command):**
 
 | Product | Binary | Tier |

@@ -402,6 +402,42 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 		})
 	}
 
+	// Cortex task health (operator view — never mutates tasks).
+	if status.Cortex != nil && status.Cortex.Error == "" && status.Cortex.Sessions > 0 {
+		if status.Cortex.Stale > 0 {
+			action := "cortex sessions --stale --json"
+			if len(status.Cortex.StaleSamples) > 0 {
+				action = fmt.Sprintf("cortex show %s", status.Cortex.StaleSamples[0].ID)
+			}
+			suggestions = append(suggestions, Suggestion{
+				Priority:  2,
+				Category:  "cortex",
+				Message:   fmt.Sprintf("cortex has %d stale sessions (active=%d total=%d) — review or resolve abandoned work", status.Cortex.Stale, status.Cortex.Active, status.Cortex.Sessions),
+				Action:    action,
+				AutoApply: false,
+			})
+		}
+		// Low verified rate with enough completed work is a process smell.
+		if status.Cortex.Completed >= 5 && status.Cortex.VerifiedRate < 0.1 {
+			suggestions = append(suggestions, Suggestion{
+				Priority:  2,
+				Category:  "cortex",
+				Message:   fmt.Sprintf("cortex verified_rate is low (%.1f%% of %d sessions) — tasks complete without verification; prefer cortex verify before remember", status.Cortex.VerifiedRate*100, status.Cortex.Sessions),
+				Action:    "cortex overview --json",
+				AutoApply: false,
+			})
+		}
+		if status.Cortex.ActiveWorkspace >= 3 {
+			suggestions = append(suggestions, Suggestion{
+				Priority:  3,
+				Category:  "cortex",
+				Message:   fmt.Sprintf("%d active cortex sessions in this workspace — consider finishing or aborting before opening more", status.Cortex.ActiveWorkspace),
+				Action:    "cortex sessions --active --json",
+				AutoApply: false,
+			})
+		}
+	}
+
 	return suggestions
 }
 
