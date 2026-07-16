@@ -91,6 +91,8 @@ minerva stack deep --stash    # save report to fcheap (minerva-stack, TTL 30d)
 
 `stack deep` sets **`retrieval_ready`** only when both **codemap** and **vecgrep** are domain-ready (indexed, not stale). Binary-on-PATH is not enough.
 
+MCPHub slice includes **unused_enabled** servers and harness **agents_drift** from `mcphub status --json`. Suggest will propose `mcphub disable <server>` for zero-call enabled servers and flag profile `mcp_servers` that name unknown hub servers.
+
 **Binary map (product → PATH command):**
 
 | Product | Binary | Tier |

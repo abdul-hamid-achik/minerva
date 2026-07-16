@@ -78,6 +78,8 @@ func (e *Engine) Analyze() []Suggestion {
 		return suggestions[i].Priority < suggestions[j].Priority
 	})
 
+	suggestions = dedupeSuggestions(suggestions)
+
 	if len(suggestions) == 0 {
 		suggestions = append(suggestions, Suggestion{
 			Priority: 4,
@@ -87,6 +89,20 @@ func (e *Engine) Analyze() []Suggestion {
 	}
 
 	return suggestions
+}
+
+func dedupeSuggestions(in []Suggestion) []Suggestion {
+	seen := make(map[string]bool, len(in))
+	out := make([]Suggestion, 0, len(in))
+	for _, s := range in {
+		key := s.Category + "\x00" + s.Message
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 func (e *Engine) skillGapSuggestions() []Suggestion {
@@ -270,13 +286,66 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 			})
 		}
 		for _, he := range status.MCPHub.HighErrorServers {
+			server := he
+			if i := strings.IndexByte(he, ':'); i > 0 {
+				server = he[:i]
+			}
 			suggestions = append(suggestions, Suggestion{
 				Priority:  2,
 				Category:  "stack",
 				Message:   fmt.Sprintf("mcphub server high error rate: %s", he),
-				Action:    "mcphub doctor --probe --json",
+				Action:    fmt.Sprintf("mcphub doctor --server %s --probe --json", server),
 				AutoApply: false,
 			})
+		}
+		// Unused enabled servers (never called) — candidates to disable.
+		for _, u := range status.MCPHub.UnusedEnabled {
+			// Don't nag about minerva itself when you're running minerva suggest.
+			prio := 3
+			if u == "minerva" {
+				prio = 4
+			}
+			suggestions = append(suggestions, Suggestion{
+				Priority:  prio,
+				Category:  "mcphub",
+				Message:   fmt.Sprintf("mcphub server %q is enabled but unused (0 calls) — consider: mcphub disable %s", u, u),
+				Action:    fmt.Sprintf("mcphub disable %s", u),
+				AutoApply: false,
+			})
+		}
+		for _, a := range status.MCPHub.AgentsDrift {
+			suggestions = append(suggestions, Suggestion{
+				Priority:  2,
+				Category:  "mcphub",
+				Message:   fmt.Sprintf("mcphub agent config drift: %s — run mcphub status / sync --write when ready", a),
+				Action:    "mcphub status --json",
+				AutoApply: false,
+			})
+		}
+
+		// Profile mcp_servers allowlist hygiene against known hub servers.
+		if e.profileMgr != nil && len(status.MCPHub.KnownServers) > 0 {
+			known := map[string]bool{}
+			for _, s := range status.MCPHub.KnownServers {
+				known[s] = true
+			}
+			for _, p := range e.profileMgr.All() {
+				for _, srv := range p.MCPServers {
+					srv = strings.TrimSpace(srv)
+					if srv == "" {
+						continue
+					}
+					if !known[srv] {
+						suggestions = append(suggestions, Suggestion{
+							Priority:  2,
+							Category:  "profile",
+							Message:   fmt.Sprintf("profile %q allowlists unknown MCP server %q (not in mcphub)", p.Name, srv),
+							Action:    fmt.Sprintf("mcphub list --json  # fix profile %q mcp_servers", p.Name),
+							AutoApply: false,
+						})
+					}
+				}
+			}
 		}
 	}
 

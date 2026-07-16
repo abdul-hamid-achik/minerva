@@ -587,11 +587,21 @@ Sets retrieval_ready only when both codemap and vecgrep are domain-ready.
 			if status.MCPHub.Error != "" {
 				fmt.Printf("mcphub:  %s\n", status.MCPHub.Error)
 			} else {
-				fmt.Printf("mcphub:  calls=%d errors=%d tokens=%d servers=%d\n",
+				fmt.Printf("mcphub:  calls=%d errors=%d tokens=%d servers=%d",
 					status.MCPHub.TotalCalls, status.MCPHub.ErrorCount,
 					status.MCPHub.EstTokens, status.MCPHub.ServerCount)
+				if status.MCPHub.EnabledCount > 0 {
+					fmt.Printf(" enabled=%d", status.MCPHub.EnabledCount)
+				}
+				fmt.Println()
 				if len(status.MCPHub.TopServers) > 0 {
 					fmt.Printf("         top=%s\n", strings.Join(status.MCPHub.TopServers, ", "))
+				}
+				if len(status.MCPHub.UnusedEnabled) > 0 {
+					fmt.Printf("         unused_enabled=%s\n", strings.Join(status.MCPHub.UnusedEnabled, ", "))
+				}
+				if len(status.MCPHub.AgentsDrift) > 0 {
+					fmt.Printf("         agents_drift=%s\n", strings.Join(status.MCPHub.AgentsDrift, ", "))
 				}
 			}
 			if len(status.Readiness) > 0 {

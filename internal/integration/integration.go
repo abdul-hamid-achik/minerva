@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -35,16 +36,23 @@ type CortexStatus struct {
 	Source  string `json:"source,omitempty"`
 }
 
-// MCPHubStats is gateway usage intelligence from mcphub stats --json.
+// MCPHubStats is gateway usage intelligence from mcphub stats + status.
 type MCPHubStats struct {
 	TotalCalls       int      `json:"total_calls"`
 	ErrorCount       int      `json:"error_count"`
 	EstTokens        int      `json:"estimated_tokens"`
 	ServerCount      int      `json:"server_count"`
+	EnabledCount     int      `json:"enabled_count,omitempty"`
 	TopServers       []string `json:"top_servers,omitempty"`
 	HighErrorServers []string `json:"high_error_servers,omitempty"` // "server:errors/calls"
-	Error            string   `json:"error,omitempty"`
-	Source           string   `json:"source,omitempty"`
+	// UnusedEnabled are enabled servers with zero recorded calls (mcphub status).
+	UnusedEnabled []string `json:"unused_enabled,omitempty"`
+	// KnownServers is the union of servers seen in stats + unused_enabled (for profile hygiene).
+	KnownServers []string `json:"known_servers,omitempty"`
+	// AgentsDrift lists harness agents not "in sync" with mcphub config.
+	AgentsDrift []string `json:"agents_drift,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	Source      string   `json:"source,omitempty"`
 }
 
 // ReadinessProbe is a domain-aware readiness result for one tool.
@@ -232,96 +240,145 @@ func ProbeCortex(ctx context.Context) *CortexStatus {
 	return cs
 }
 
-// ProbeMCPHub calls mcphub stats --json with the real field names.
+// ProbeMCPHub calls mcphub stats --json and status --json.
 func ProbeMCPHub(ctx context.Context) *MCPHubStats {
-	ms := &MCPHubStats{Source: "mcphub stats --json"}
+	ms := &MCPHubStats{Source: "mcphub stats+status --json"}
 
 	if _, err := exec.LookPath("mcphub"); err != nil {
 		ms.Error = "mcphub not found in PATH"
 		return ms
 	}
 
-	ctxCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
+	known := map[string]bool{}
 
-	cmd := exec.CommandContext(ctxCtx, "mcphub", "stats", "--json")
-	out, err := cmd.Output()
-	if err != nil {
-		ms.Error = fmt.Sprintf("mcphub stats failed: %v", err)
-		return ms
-	}
-
-	// Actual schema uses calls / est_tokens / errors (not total_calls).
-	var result struct {
-		Totals struct {
-			Calls     int `json:"calls"`
-			EstTokens int `json:"est_tokens"`
-			TotalMS   int `json:"total_ms"`
-			Errors    int `json:"errors"`
-		} `json:"totals"`
-		Servers []struct {
-			Server    string `json:"server"`
-			Calls     int    `json:"calls"`
-			Errors    int    `json:"errors"`
-			EstTokens int    `json:"est_tokens"`
-			AvgMS     int    `json:"avg_ms"`
-		} `json:"servers"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		ms.Error = fmt.Sprintf("parse mcphub stats: %v", err)
-		return ms
-	}
-
-	if result.Totals.Calls > 0 || result.Totals.Errors > 0 {
-		ms.TotalCalls = result.Totals.Calls
-		ms.ErrorCount = result.Totals.Errors
-		ms.EstTokens = result.Totals.EstTokens
-	}
-
-	ms.ServerCount = len(result.Servers)
-
-	// Prefer totals when present; otherwise sum per-server rows.
-	if result.Totals.Calls > 0 || result.Totals.Errors > 0 || result.Totals.EstTokens > 0 {
-		ms.TotalCalls = result.Totals.Calls
-		ms.ErrorCount = result.Totals.Errors
-		ms.EstTokens = result.Totals.EstTokens
-	} else {
-		for _, s := range result.Servers {
-			ms.TotalCalls += s.Calls
-			ms.ErrorCount += s.Errors
-			ms.EstTokens += s.EstTokens
-		}
-	}
-
-	type ranked struct {
-		name   string
-		calls  int
-		errors int
-	}
-	var ranks []ranked
-	for _, s := range result.Servers {
-		if s.Calls > 0 {
-			ranks = append(ranks, ranked{s.Server, s.Calls, s.Errors})
-		}
-		// High error rate: ≥5 calls and error rate ≥ 20%
-		if s.Calls >= 5 && s.Errors*100/s.Calls >= 20 {
-			ms.HighErrorServers = append(ms.HighErrorServers,
-				fmt.Sprintf("%s:%d/%d", s.Server, s.Errors, s.Calls))
-		}
-	}
-	for i := 0; i < len(ranks); i++ {
-		for j := i + 1; j < len(ranks); j++ {
-			if ranks[j].calls > ranks[i].calls {
-				ranks[i], ranks[j] = ranks[j], ranks[i]
+	// --- stats ---
+	{
+		ctxCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		cmd := exec.CommandContext(ctxCtx, "mcphub", "stats", "--json")
+		out, err := cmd.Output()
+		cancel()
+		if err != nil {
+			ms.Error = fmt.Sprintf("mcphub stats failed: %v", err)
+			// still try status
+		} else {
+			var result struct {
+				Totals struct {
+					Calls     int `json:"calls"`
+					EstTokens int `json:"est_tokens"`
+					Errors    int `json:"errors"`
+				} `json:"totals"`
+				Servers []struct {
+					Server    string `json:"server"`
+					Calls     int    `json:"calls"`
+					Errors    int    `json:"errors"`
+					EstTokens int    `json:"est_tokens"`
+				} `json:"servers"`
+			}
+			if err := json.Unmarshal(out, &result); err != nil {
+				ms.Error = fmt.Sprintf("parse mcphub stats: %v", err)
+			} else {
+				ms.ServerCount = len(result.Servers)
+				if result.Totals.Calls > 0 || result.Totals.Errors > 0 || result.Totals.EstTokens > 0 {
+					ms.TotalCalls = result.Totals.Calls
+					ms.ErrorCount = result.Totals.Errors
+					ms.EstTokens = result.Totals.EstTokens
+				} else {
+					for _, s := range result.Servers {
+						ms.TotalCalls += s.Calls
+						ms.ErrorCount += s.Errors
+						ms.EstTokens += s.EstTokens
+					}
+				}
+				type ranked struct {
+					name  string
+					calls int
+				}
+				var ranks []ranked
+				for _, s := range result.Servers {
+					known[s.Server] = true
+					if s.Calls > 0 {
+						ranks = append(ranks, ranked{s.Server, s.Calls})
+					}
+					if s.Calls >= 5 && s.Errors*100/s.Calls >= 20 {
+						ms.HighErrorServers = append(ms.HighErrorServers,
+							fmt.Sprintf("%s:%d/%d", s.Server, s.Errors, s.Calls))
+					}
+				}
+				for i := 0; i < len(ranks); i++ {
+					for j := i + 1; j < len(ranks); j++ {
+						if ranks[j].calls > ranks[i].calls {
+							ranks[i], ranks[j] = ranks[j], ranks[i]
+						}
+					}
+				}
+				for i, r := range ranks {
+					if i >= 5 {
+						break
+					}
+					ms.TopServers = append(ms.TopServers, fmt.Sprintf("%s(%d)", r.name, r.calls))
+				}
 			}
 		}
 	}
-	for i, r := range ranks {
-		if i >= 5 {
-			break
+
+	// --- status (unused_enabled, agent sync) ---
+	{
+		ctxCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		cmd := exec.CommandContext(ctxCtx, "mcphub", "status", "--json")
+		out, err := cmd.Output()
+		cancel()
+		if err == nil && len(out) > 0 {
+			var st struct {
+				Servers       int      `json:"servers"`
+				Enabled       int      `json:"enabled"`
+				Calls         int      `json:"calls"`
+				Errors        int      `json:"errors"`
+				EstTokens     int      `json:"est_tokens"`
+				UnusedEnabled []string `json:"unused_enabled"`
+				Agents        []struct {
+					Agent   string `json:"agent"`
+					State   string `json:"state"`
+					Pending int    `json:"pending"`
+				} `json:"agents"`
+			}
+			if err := json.Unmarshal(out, &st); err == nil {
+				ms.EnabledCount = st.Enabled
+				if st.Servers > ms.ServerCount {
+					ms.ServerCount = st.Servers
+				}
+				// Prefer status totals when stats lacked totals object.
+				if ms.TotalCalls == 0 && st.Calls > 0 {
+					ms.TotalCalls = st.Calls
+					ms.ErrorCount = st.Errors
+					ms.EstTokens = st.EstTokens
+				}
+				ms.UnusedEnabled = append([]string(nil), st.UnusedEnabled...)
+				for _, u := range st.UnusedEnabled {
+					known[u] = true
+				}
+				for _, a := range st.Agents {
+					state := strings.ToLower(strings.TrimSpace(a.State))
+					if a.Pending > 0 || (state != "" && state != "in sync" && state != "in_sync") {
+						label := a.Agent
+						if a.Pending > 0 {
+							label = fmt.Sprintf("%s(pending=%d)", a.Agent, a.Pending)
+						} else {
+							label = fmt.Sprintf("%s(%s)", a.Agent, a.State)
+						}
+						ms.AgentsDrift = append(ms.AgentsDrift, label)
+					}
+				}
+			}
 		}
-		ms.TopServers = append(ms.TopServers, fmt.Sprintf("%s(%d)", r.name, r.calls))
 	}
+
+	for name := range known {
+		ms.KnownServers = append(ms.KnownServers, name)
+	}
+	sort.Strings(ms.KnownServers)
+	sort.Strings(ms.UnusedEnabled)
+	sort.Strings(ms.HighErrorServers)
+	sort.Strings(ms.AgentsDrift)
 
 	return ms
 }
