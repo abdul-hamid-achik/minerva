@@ -91,8 +91,17 @@ button {
 
 .VPNavBar {
   border-bottom-color: rgba(25, 28, 27, 0.1) !important;
-  background: rgba(243, 240, 232, 0.84) !important;
+  background: color-mix(in srgb, var(--vp-c-bg) 86%, transparent) !important;
   backdrop-filter: blur(18px) saturate(120%);
+}
+
+.VPNavBar.has-sidebar .title,
+.VPNavBar.has-sidebar .content-body {
+  background: transparent !important;
+}
+
+.dark .VPNavBar {
+  border-bottom-color: rgba(244, 240, 230, 0.1) !important;
 }
 
 .VPNavBarTitle .title {
@@ -128,8 +137,13 @@ button {
 }
 
 .VPSidebar {
-  background: rgba(233, 229, 220, 0.72) !important;
+  border-right: 1px solid var(--vp-c-divider);
+  background: color-mix(in srgb, var(--vp-c-bg-alt) 90%, transparent) !important;
   backdrop-filter: blur(14px);
+}
+
+.VPSidebar .curtain {
+  background: transparent !important;
 }
 
 .VPSidebarItem.level-0 > .item > .text {
@@ -141,12 +155,35 @@ button {
 }
 
 .VPSidebarItem.level-1 .text {
+  color: var(--vp-c-text-2);
   font-size: 13px;
   font-weight: 600;
+  transition: color 180ms ease;
 }
 
 .VPSidebarItem.is-active > .item .link > .text {
   color: var(--vp-c-brand-1) !important;
+  font-weight: 700;
+}
+
+.VPSidebarItem.level-1 > .item > .link {
+  position: relative;
+}
+
+.VPSidebarItem.level-1.is-active > .item > .link::before {
+  position: absolute;
+  top: 50%;
+  left: -16px;
+  width: 2px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--vp-c-brand-1);
+  content: '';
+  transform: translateY(-50%);
+}
+
+.VPSidebarItem.level-1 > .item > .link:hover .text {
+  color: var(--vp-c-text-1);
 }
 
 .vp-doc h1,
