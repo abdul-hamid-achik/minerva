@@ -90,3 +90,31 @@ tasks:
     cmds:
       - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN}}
       - glyph run ./specs/version.yml ./specs/help.yml ./specs/stack_check_json.yml ./specs/init_and_skill.yml ./specs/evidence_docs.yml --format md
+
+  docs:dev:
+    desc: VitePress docs site (http://127.0.0.1:5173)
+    cmds:
+      - npm run docs:dev
+
+  docs:build:
+    desc: Build docs for Vercel / static hosting
+    cmds:
+      - npm run docs:build
+
+  cairn:
+    desc: Run Cairn browser specs (starts VitePress via tmux services on :5173)
+    cmds:
+      - cairn run ./browser-specs --format md
+
+  cairn-preview:
+    desc: Run Cairn against vitepress preview on :4173 (build first)
+    cmds:
+      - npm run docs:build
+      - npm run docs:preview &
+      - sleep 2
+      - cairn run ./browser-specs --env preview --no-services --format md
+
+  cairn-prod:
+    desc: Run Cairn browser specs against https://minervacli.dev
+    cmds:
+      - cairn run ./browser-specs --env production --format md --no-services

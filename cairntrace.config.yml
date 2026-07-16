@@ -1,0 +1,36 @@
+version: 1
+project: minerva-docs
+defaultEnvironment: local
+
+retention:
+  keepRuns: 15
+
+environments:
+  local:
+    baseUrl: http://127.0.0.1:5173
+    vars:
+      siteName: Minerva
+  # Built static preview (vitepress preview) — use with --no-services
+  preview:
+    baseUrl: http://127.0.0.1:4173
+    services: false
+    vars:
+      siteName: Minerva
+  production:
+    baseUrl: https://minervacli.dev
+    services: false
+    vars:
+      siteName: Minerva
+
+# Start VitePress for local browser specs (skipped when --env production/preview).
+services:
+  tmux:
+    session: minerva-docs
+    reuseExisting: true
+    readyTimeoutMs: 90000
+    windows:
+      - name: site
+        cwd: .
+        command: npm run docs:dev
+        readyOn:
+          url: http://127.0.0.1:5173/

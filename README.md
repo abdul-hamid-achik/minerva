@@ -207,9 +207,15 @@ task lint
 task fmt
 task glyph-fast    # Glyphrun CLI self-specs (fast)
 task glyph         # includes slow stack deep retrieval_ready field check
+task docs:dev      # VitePress site → http://127.0.0.1:5173
+task docs:build    # static site → docs/.vitepress/dist
+task cairn         # browser specs against local docs
+task cairn-prod    # browser specs against https://minervacli.dev
 ```
 
-Specs live in `specs/*.yml` and use [glyph](https://github.com/abdul-hamid-achik/glyphrun) (binary `glyph`). Isolated library tests set `MINERVA_AGENTS_DIR` under `.glyphrun/tmp/`.
+- CLI contracts: `specs/*.yml` ([glyph](https://github.com/abdul-hamid-achik/glyphrun))
+- Docs site: `docs/` → deploy to **minervacli.dev** (Vercel)
+- Browser contracts: `browser-specs/*.yml` ([cairn](https://github.com/abdul-hamid-achik/cairntrace))
 
 ## License
 

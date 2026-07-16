@@ -1,0 +1,33 @@
+version: 1
+name: minerva_docs_landing
+intent: |
+  a visitor lands on the Minerva docs home and sees the product name and
+  primary call-to-action into the guide without console errors.
+environment: local
+coldStart: guest
+
+outcomes:
+  - id: hero_names_minerva
+    description: the landing hero shows the Minerva product name
+    verify:
+      text:
+        contains: Minerva
+  - id: cta_getting_started
+    description: a Get started control is available
+    verify:
+      text:
+        contains: Get started
+  - id: no_console_errors
+    description: landing load produces no console errors
+    verify:
+      console:
+        errorsMax: 0
+
+steps:
+  - id: open_home
+    open: /
+  - id: wait_hero
+    wait:
+      text: Minerva
+      timeoutMs: 10000
+contractHash: sha256:2bdc515f45cfcf1fc96b9f695c7917a86b31396fd5dd5be658613e95fde8134b

@@ -1,0 +1,32 @@
+version: 1
+name: minerva_docs_concepts
+intent: |
+  a visitor can open Concepts and see the shared vs Minerva-local distinction.
+environment: local
+coldStart: guest
+
+outcomes:
+  - id: concepts_heading
+    description: Concepts page is titled Concepts
+    verify:
+      text:
+        contains: Concepts
+  - id: activation_honesty
+    description: page explains Minerva-local activation
+    verify:
+      text:
+        contains: Minerva-local
+  - id: no_console_errors
+    description: no console errors
+    verify:
+      console:
+        errorsMax: 0
+
+steps:
+  - id: open_concepts
+    open: /guide/concepts
+  - id: wait_heading
+    wait:
+      text: Concepts
+      timeoutMs: 10000
+contractHash: sha256:9679273ac61d0c31e950446091121ad4a68734caac4737a00d073f6728efdefb

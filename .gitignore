@@ -4,3 +4,7 @@ bin/
 *.out
 .DS_Store
 .glyphrun/
+.cairntrace/
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/

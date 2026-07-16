@@ -1,0 +1,33 @@
+version: 1
+name: minerva_docs_nav
+intent: |
+  a visitor can open Getting started from the docs site and read the install
+  path without console errors.
+environment: local
+coldStart: guest
+
+outcomes:
+  - id: getting_started_heading
+    description: Getting started page shows its H1
+    verify:
+      text:
+        contains: Getting started
+  - id: install_section_visible
+    description: install instructions mention go install or task build
+    verify:
+      text:
+        contains: Install
+  - id: no_console_errors
+    description: navigation produces no console errors
+    verify:
+      console:
+        errorsMax: 0
+
+steps:
+  - id: open_getting_started
+    open: /guide/getting-started
+  - id: wait_heading
+    wait:
+      text: Getting started
+      timeoutMs: 10000
+contractHash: sha256:6fb678e1734cc0766ec81f763b9b527bbac0c89a13b0c439fc72b589e28b4576
