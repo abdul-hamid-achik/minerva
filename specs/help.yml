@@ -1,0 +1,51 @@
+version: 1
+name: minerva_help
+intent: |
+    operators can run minerva -h and discover the public command surface
+    for library management, stack readiness, evidence, and suggestions.
+target:
+    cmd: ["./bin/minerva", "-h"]
+    cwd: "."
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: "go build -o ./bin/minerva ./cmd/minerva"
+          cwd: "."
+          timeoutMs: 60000
+steps:
+    - wait:
+        screen:
+            contains: "Available Commands:"
+        timeoutMs: 3000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: usage_visible
+      description: help shows available commands
+      verify:
+        screen:
+            contains: "Available Commands:"
+    - id: core_commands_documented
+      description: help lists skill, profile, stack, suggest, evidence, and mcp
+      verify:
+        command:
+            run: |
+                output="$(./bin/minerva -h 2>&1)"
+                printf '%s\n' "$output" | grep -qE -- 'skill'
+                printf '%s\n' "$output" | grep -qE -- 'profile'
+                printf '%s\n' "$output" | grep -qE -- 'stack'
+                printf '%s\n' "$output" | grep -qE -- 'suggest'
+                printf '%s\n' "$output" | grep -qE -- 'evidence'
+                printf '%s\n' "$output" | grep -qE -- 'mcp'
+                printf '%s\n' "$output" | grep -qE -- 'template'
+    - id: exits_zero
+      description: help exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:51b9fc0b969aa8bfeb803323727fad3d1a5c7a7d6b89c0e5c5910462d36513e3

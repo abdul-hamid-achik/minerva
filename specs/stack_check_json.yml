@@ -1,0 +1,57 @@
+version: 1
+name: minerva_stack_check_json
+intent: |
+    operators can run minerva stack check --json and receive tiered presence
+    with correct binary names (glyph, cairn, tvault) and core_healthy.
+target:
+    cmd: ["./bin/minerva", "stack", "check", "--json"]
+    cwd: "."
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: "go build -o ./bin/minerva ./cmd/minerva"
+          cwd: "."
+          timeoutMs: 60000
+steps:
+    - wait:
+        screen:
+            contains: "core_healthy"
+        timeoutMs: 15000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: json_has_core_healthy
+      description: JSON includes core_healthy boolean field
+      verify:
+        command:
+            run: |
+                ./bin/minerva stack check --json | grep -q '"core_healthy"'
+    - id: glyph_binary_is_glyph
+      description: glyphrun product maps to command glyph in the catalog
+      verify:
+        command:
+            run: |
+                ./bin/minerva stack check --json | grep -q '"command": "glyph"'
+    - id: cairn_binary_is_cairn
+      description: cairntrace product maps to command cairn
+      verify:
+        command:
+            run: |
+                ./bin/minerva stack check --json | grep -q '"command": "cairn"'
+    - id: tvault_binary
+      description: tinyvault product maps to command tvault
+      verify:
+        command:
+            run: |
+                ./bin/minerva stack check --json | grep -q '"command": "tvault"'
+    - id: exits_zero
+      description: stack check exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:7b9ab359604c27c05798530bfeb54c646a6c28568a7d17f3a8d5b6099ba73155

@@ -1,0 +1,56 @@
+version: 1
+name: minerva_init_and_skill
+intent: |
+    operators can initialize an isolated agents root and create/list a skill
+    without touching the real ~/.agents tree.
+target:
+    cmd: ["./bin/minerva", "skill", "list"]
+    cwd: "."
+    env:
+        MINERVA_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/agents-root"
+terminal:
+    cols: 100
+    rows: 30
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: |
+            set -e
+            go build -o ./bin/minerva ./cmd/minerva
+            rm -rf .glyphrun/tmp/agents-root
+            MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/agents-root" ./bin/minerva init
+            MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/agents-root" ./bin/minerva skill create glyph-demo "demo body" -d "glyph demo skill"
+          cwd: "."
+          timeoutMs: 60000
+steps:
+    - wait:
+        screen:
+            contains: "glyph-demo"
+        timeoutMs: 5000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: skill_listed
+      description: skill list shows the created skill name
+      verify:
+        screen:
+            contains: "glyph-demo"
+    - id: skill_file_exists
+      description: SKILL.md was written under the isolated agents root
+      verify:
+        command:
+            run: test -s .glyphrun/tmp/agents-root/skills/glyph-demo/SKILL.md
+    - id: description_quoted_in_yaml
+      description: skill frontmatter quotes the description safely
+      verify:
+        command:
+            run: |
+                grep -q 'description:' .glyphrun/tmp/agents-root/skills/glyph-demo/SKILL.md
+    - id: exits_zero
+      description: skill list exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:deb0424788797b781a9b9007d3f09dfbbe439966e65ce4605b215966cbe2ec98

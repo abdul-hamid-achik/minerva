@@ -1,0 +1,43 @@
+version: 1
+name: minerva_retrieval_ready_field
+intent: |
+    stack deep --json always exposes retrieval_ready so agents can fail closed
+    on unindexed codemap/vecgrep before trusting semantic answers.
+target:
+    cmd: ["./bin/minerva", "stack", "deep", "--json"]
+    cwd: "."
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: "go build -o ./bin/minerva ./cmd/minerva"
+          cwd: "."
+          timeoutMs: 60000
+steps:
+    - wait:
+        screen:
+            contains: "retrieval_ready"
+        timeoutMs: 60000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 15000
+outcomes:
+    - id: retrieval_ready_field_present
+      description: PTY output includes retrieval_ready JSON field
+      verify:
+        screen:
+            contains: "retrieval_ready"
+    - id: retrieval_gaps_field_present
+      description: PTY output includes retrieval_gaps JSON field
+      verify:
+        screen:
+            contains: "retrieval_gaps"
+    - id: exits_zero
+      description: stack deep exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:a9f8b463f34f851a4fa2b8ea680d52797244acd52da78c79fdae27b71f0e9fda

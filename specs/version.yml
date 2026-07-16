@@ -1,0 +1,38 @@
+version: 1
+name: minerva_version
+intent: |
+    operators can run minerva --version and the command exits successfully
+    with build metadata.
+target:
+    cmd: ["./bin/minerva", "--version"]
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 24
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: "go build -o ./bin/minerva ./cmd/minerva"
+          cwd: "."
+          timeoutMs: 60000
+steps:
+    - wait:
+        screen:
+            contains: "minerva version"
+        timeoutMs: 3000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: version_printed
+      description: version command prints minerva version text
+      verify:
+        screen:
+            contains: "minerva version"
+    - id: exits_zero
+      description: version exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:0373706b536cd08cd63985dabc63833fb1ff0ed0cdb45302f42b17d492dcd8d1

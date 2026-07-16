@@ -1,0 +1,42 @@
+version: 1
+name: minerva_evidence_docs
+intent: |
+    operators can print Minerva fcheap evidence tag conventions including
+    outcome and attribution tags.
+target:
+    cmd: ["./bin/minerva", "evidence", "docs"]
+    cwd: "."
+terminal:
+    cols: 100
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: "go build -o ./bin/minerva ./cmd/minerva"
+          cwd: "."
+          timeoutMs: 60000
+steps:
+    - wait:
+        screen:
+            contains: "minerva-eval"
+        timeoutMs: 3000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: conventions_printed
+      description: docs mention minerva-eval and outcome tags
+      verify:
+        command:
+            run: |
+                output="$(./bin/minerva evidence docs 2>&1)"
+                printf '%s\n' "$output" | grep -q 'minerva-eval'
+                printf '%s\n' "$output" | grep -q 'outcome:pass'
+                printf '%s\n' "$output" | grep -q 'skill:'
+    - id: exits_zero
+      description: evidence docs exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:6e08449ac8a0efec04343cc994c53f73b9538dc1ffc6239e732c9d693243a58a

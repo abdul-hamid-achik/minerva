@@ -205,7 +205,11 @@ task build
 task test
 task lint
 task fmt
+task glyph-fast    # Glyphrun CLI self-specs (fast)
+task glyph         # includes slow stack deep retrieval_ready field check
 ```
+
+Specs live in `specs/*.yml` and use [glyph](https://github.com/abdul-hamid-achik/glyphrun) (binary `glyph`). Isolated library tests set `MINERVA_AGENTS_DIR` under `.glyphrun/tmp/`.
 
 ## License
 
