@@ -518,11 +518,15 @@ func newStackCheckCmd() *cobra.Command {
 
 func newStackDeepCmd() *cobra.Command {
 	var workspace string
-	var jsonOut bool
+	var jsonOut, stash bool
 	cmd := &cobra.Command{
 		Use:   "deep [workspace]",
 		Short: "Deep stack probe (bob/cortex/mcphub + readiness doctors)",
-		Long:  `Composes sibling CLI contracts: bob check/context, cortex doctor, mcphub stats, plus optional codemap/vecgrep/fcheap/tvault/monitor readiness probes.`,
+		Long: `Composes sibling CLI contracts: bob check/context, cortex doctor, mcphub stats,
+plus optional codemap/vecgrep/fcheap/tvault/monitor readiness probes.
+
+Sets retrieval_ready only when both codemap and vecgrep are domain-ready.
+--stash writes the JSON report to fcheap with minerva-stack tags (TTL 30d).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws := workspace
 			if ws == "" && len(args) > 0 {
@@ -532,6 +536,30 @@ func newStackDeepCmd() *cobra.Command {
 				ws = "."
 			}
 			status := integration.DeepCheck(cmd.Context(), ws)
+
+			if stash {
+				outcome := "pass"
+				if !status.RetrievalReady {
+					outcome = "fail"
+				}
+				extra := []string{}
+				if status.RetrievalReady {
+					extra = append(extra, "retrieval:ready")
+				} else {
+					extra = append(extra, "retrieval:not-ready")
+					for _, g := range status.RetrievalGaps {
+						extra = append(extra, "gap:"+g)
+					}
+				}
+				res, err := evidence.SaveJSON(cmd.Context(), "stack-deep", "stack", outcome, extra, status)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "stash warning: %v\n", err)
+				} else if res != nil && res.ID != "" {
+					fmt.Fprintf(os.Stderr, "stashed stack deep id=%s outcome=%s\n", res.ID, outcome)
+					_ = analyticsStore().Record("stack_deep_stash", res.ID, outcome)
+				}
+			}
+
 			if jsonOut {
 				return printJSON(status)
 			}
@@ -589,6 +617,15 @@ func newStackDeepCmd() *cobra.Command {
 					}
 				}
 			}
+			// Retrieval green light
+			retIcon := "✓"
+			if !status.RetrievalReady {
+				retIcon = "✗"
+			}
+			fmt.Printf("\n%s retrieval_ready=%v\n", retIcon, status.RetrievalReady)
+			if status.RetrievalDetail != "" {
+				fmt.Printf("  %s\n", status.RetrievalDetail)
+			}
 			if status.MCPHub != nil && len(status.MCPHub.HighErrorServers) > 0 {
 				fmt.Printf("\nmcphub high-error servers: %s\n", strings.Join(status.MCPHub.HighErrorServers, ", "))
 			}
@@ -598,6 +635,7 @@ func newStackDeepCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&workspace, "workspace", "C", "", "workspace directory")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
+	cmd.Flags().BoolVar(&stash, "stash", false, "save report to fcheap (minerva-stack tags, TTL 30d)")
 	return cmd
 }
 
@@ -662,6 +700,7 @@ local-agent session. Prefer profile skill lists for durable harness behavior.
 			ws, _ := os.Getwd()
 			engine := suggest.NewEngine(mgr, pmgr, store, ws)
 			engine.IncludeReadiness = true
+			engine.IncludeEvidence = true
 			suggestions := engine.Analyze()
 
 			if apply {
@@ -871,7 +910,7 @@ func newEvidenceSaveCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&kind, "kind", "k", "eval", "eval|suggest|stack|incident|other")
 	cmd.Flags().StringVar(&outcome, "outcome", "", "pass|fail|skip")
 	cmd.Flags().StringVar(&ttl, "ttl", "", "ttl e.g. 30d")
-	cmd.Flags().StringSliceVarP(&tags, "tag", "t", nil, "extra tags")
+	cmd.Flags().StringSliceVarP(&tags, "tag", "t", nil, "extra tags (use skill:name profile:name for suggest attribution)")
 	cmd.Flags().BoolVar(&index, "index", true, "index for search after save")
 	return cmd
 }

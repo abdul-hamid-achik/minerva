@@ -403,6 +403,7 @@ func (s *Server) handleProfileDelete(ctx context.Context, _ *sdkmcp.CallToolRequ
 
 type StackDeepInput struct {
 	Workspace string `json:"workspace,omitempty" jsonschema:"workspace directory for bob/cortex probes; defaults to cwd"`
+	Stash     bool   `json:"stash,omitempty" jsonschema:"if true, save the report to fcheap with minerva-stack tags"`
 }
 
 func (s *Server) handleStackCheck(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
@@ -416,7 +417,31 @@ func (s *Server) handleStackDeep(ctx context.Context, _ *sdkmcp.CallToolRequest,
 		workspace = "."
 	}
 	status := integration.DeepCheck(ctx, workspace)
-	return textResult(status), status, nil
+	result := map[string]any{"status": status}
+	if in.Stash {
+		outcome := "pass"
+		if !status.RetrievalReady {
+			outcome = "fail"
+		}
+		extra := []string{}
+		if status.RetrievalReady {
+			extra = append(extra, "retrieval:ready")
+		} else {
+			extra = append(extra, "retrieval:not-ready")
+			for _, g := range status.RetrievalGaps {
+				extra = append(extra, "gap:"+g)
+			}
+		}
+		res, err := evidence.SaveJSON(ctx, "stack-deep", "stack", outcome, extra, status)
+		if err != nil {
+			result["stash_error"] = err.Error()
+		} else if res != nil {
+			result["stash_id"] = res.ID
+			result["stash_outcome"] = outcome
+			_ = s.analyticsStore.Record("stack_deep_stash", res.ID, outcome)
+		}
+	}
+	return textResult(result), result, nil
 }
 
 // --- Analytics handler ---
@@ -440,6 +465,7 @@ func (s *Server) handleSuggest(ctx context.Context, _ *sdkmcp.CallToolRequest, _
 	}
 	engine := suggest.NewEngine(s.skillManager, s.profileManager, s.analyticsStore, ws)
 	engine.IncludeReadiness = true
+	engine.IncludeEvidence = true
 	suggestions := engine.Analyze()
 	return textResult(suggestions), map[string]any{"suggestions": suggestions}, nil
 }

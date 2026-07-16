@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/abdul-hamid-achik/minerva/internal/analytics"
+	"github.com/abdul-hamid-achik/minerva/internal/evidence"
 	"github.com/abdul-hamid-achik/minerva/internal/integration"
 	"github.com/abdul-hamid-achik/minerva/internal/monitor"
 	"github.com/abdul-hamid-achik/minerva/internal/profile"
@@ -39,6 +40,8 @@ type Engine struct {
 	workspace  string
 	// IncludeReadiness runs deep stack probes (codemap/vecgrep/mcphub). Default false for tests; CLI/MCP enable it.
 	IncludeReadiness bool
+	// IncludeEvidence reads fcheap outcome:fail stashes for skill/profile suggestions.
+	IncludeEvidence bool
 }
 
 // NewEngine creates a suggestion engine (presence-level only; enable IncludeReadiness for deep probes).
@@ -60,6 +63,9 @@ func (e *Engine) Analyze() []Suggestion {
 	suggestions = append(suggestions, e.stackHealthSuggestions()...)
 	if e.IncludeReadiness {
 		suggestions = append(suggestions, e.readinessSuggestions()...)
+	}
+	if e.IncludeEvidence {
+		suggestions = append(suggestions, e.evidenceFailSuggestions()...)
 	}
 	suggestions = append(suggestions, e.analyticsSuggestions()...)
 	suggestions = append(suggestions, e.crossProfileSuggestions()...)
@@ -308,6 +314,123 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 				AutoApply: false,
 			})
 		}
+	}
+
+	// Retrieval green light: both codemap and vecgrep must be ready.
+	if !status.RetrievalReady {
+		action := "minerva stack deep --json"
+		if len(status.RetrievalGaps) == 1 && status.RetrievalGaps[0] == "codemap" {
+			action = "codemap index"
+		} else if len(status.RetrievalGaps) == 1 && status.RetrievalGaps[0] == "vecgrep" {
+			action = "vecgrep index"
+		}
+		suggestions = append(suggestions, Suggestion{
+			Priority:  1,
+			Category:  "retrieval",
+			Message:   fmt.Sprintf("retrieval not ready — %s (do not trust semantic/graph answers until green)", status.RetrievalDetail),
+			Action:    action,
+			AutoApply: false,
+		})
+	}
+
+	return suggestions
+}
+
+// evidenceFailSuggestions reads fcheap minerva+outcome:fail stashes and maps tags to skills/profiles.
+func (e *Engine) evidenceFailSuggestions() []Suggestion {
+	var suggestions []Suggestion
+
+	fails, err := evidence.ListOutcomeFails(context.Background())
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		suggestions = append(suggestions, Suggestion{
+			Priority:  4,
+			Category:  "evidence",
+			Message:   fmt.Sprintf("could not list fcheap fails: %v", err),
+			AutoApply: false,
+		})
+		return suggestions
+	}
+	if len(fails) == 0 {
+		return nil
+	}
+
+	skillFails := map[string]int{}
+	profileFails := map[string]int{}
+	untagged := 0
+	for _, f := range fails {
+		if len(f.Skills) == 0 && len(f.Profiles) == 0 {
+			untagged++
+		}
+		for _, s := range f.Skills {
+			skillFails[s]++
+		}
+		for _, p := range f.Profiles {
+			profileFails[p]++
+		}
+	}
+
+	type counted struct {
+		name  string
+		count int
+	}
+	topN := func(m map[string]int, n int) []counted {
+		var list []counted
+		for k, v := range m {
+			list = append(list, counted{k, v})
+		}
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].count == list[j].count {
+				return list[i].name < list[j].name
+			}
+			return list[i].count > list[j].count
+		})
+		if len(list) > n {
+			list = list[:n]
+		}
+		return list
+	}
+
+	suggestions = append(suggestions, Suggestion{
+		Priority:  2,
+		Category:  "evidence",
+		Message:   fmt.Sprintf("%d fcheap stashes tagged outcome:fail (minerva) — review with: fcheap list --tag minerva --tag outcome:fail --json", len(fails)),
+		Action:    "fcheap list --tag minerva --tag outcome:fail --json",
+		AutoApply: false,
+	})
+
+	for _, c := range topN(skillFails, 5) {
+		action := fmt.Sprintf("minerva skill show %s", c.name)
+		if e.skillMgr != nil && e.skillMgr.IsActive(c.name) {
+			action = fmt.Sprintf("minerva skill deactivate %s", c.name)
+		}
+		suggestions = append(suggestions, Suggestion{
+			Priority:  2,
+			Category:  "evidence",
+			Message:   fmt.Sprintf("skill %q appears in %d failed evidence stashes — review or deactivate if harmful", c.name, c.count),
+			Action:    action,
+			AutoApply: false,
+		})
+	}
+	for _, c := range topN(profileFails, 5) {
+		suggestions = append(suggestions, Suggestion{
+			Priority:  2,
+			Category:  "evidence",
+			Message:   fmt.Sprintf("profile %q appears in %d failed evidence stashes — review system prompt / skills", c.name, c.count),
+			Action:    fmt.Sprintf("minerva profile show %s", c.name),
+			AutoApply: false,
+		})
+	}
+	if untagged > 0 {
+		suggestions = append(suggestions, Suggestion{
+			Priority:  3,
+			Category:  "evidence",
+			Message:   fmt.Sprintf("%d failed stashes lack skill:/profile: tags — tag future evidence for better attribution", untagged),
+			Action:    "minerva evidence docs",
+			AutoApply: false,
+		})
 	}
 
 	return suggestions

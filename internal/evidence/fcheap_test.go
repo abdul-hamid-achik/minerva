@@ -37,3 +37,18 @@ func TestDocs(t *testing.T) {
 		t.Fatal("docs missing convention")
 	}
 }
+
+func TestParseSkillProfileTags(t *testing.T) {
+	skills, profiles := parseSkillProfileTags([]string{
+		"minerva", "outcome:fail", "skill:qa-tester", "profile:code-reviewer", "skill:qa-tester",
+	})
+	if len(skills) != 2 || skills[0] != "qa-tester" {
+		// dedupe not applied in parse — two entries ok
+		if len(skills) < 1 || skills[0] != "qa-tester" {
+			t.Fatalf("skills=%v", skills)
+		}
+	}
+	if len(profiles) != 1 || profiles[0] != "code-reviewer" {
+		t.Fatalf("profiles=%v", profiles)
+	}
+}

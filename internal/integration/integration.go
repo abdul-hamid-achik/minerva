@@ -63,7 +63,12 @@ type DeepStackStatus struct {
 	Cortex    *CortexStatus    `json:"cortex"`
 	MCPHub    *MCPHubStats     `json:"mcphub"`
 	Readiness []ReadinessProbe `json:"readiness,omitempty"`
-	Summary   string           `json:"summary"`
+	// RetrievalReady is true only when both codemap and vecgrep report Ready.
+	// Presence of binaries is not enough — indexes must be usable.
+	RetrievalReady  bool     `json:"retrieval_ready"`
+	RetrievalDetail string   `json:"retrieval_detail,omitempty"`
+	RetrievalGaps   []string `json:"retrieval_gaps,omitempty"` // e.g. codemap, vecgrep
+	Summary         string   `json:"summary"`
 }
 
 // ProbeBob calls bob check and bob context for a workspace.
@@ -395,6 +400,7 @@ func DeepCheck(ctx context.Context, workspace string) *DeepStackStatus {
 	status.Cortex = ProbeCortex(ctx)
 	status.MCPHub = ProbeMCPHub(ctx)
 	status.Readiness = ProbeReadiness(ctx)
+	status.computeRetrieval()
 
 	var parts []string
 	if status.Bob.Error != "" {
@@ -434,8 +440,62 @@ func DeepCheck(ctx context.Context, workspace string) *DeepStackStatus {
 	}
 	parts = append(parts, fmt.Sprintf("readiness probes: %d ok / %d failed", readyOK, readyFail))
 
+	if status.RetrievalReady {
+		parts = append(parts, "retrieval: ready")
+	} else {
+		parts = append(parts, "retrieval: not ready ("+strings.Join(status.RetrievalGaps, ", ")+")")
+	}
+
 	status.Summary = strings.Join(parts, "; ")
 	return status
+}
+
+// computeRetrieval sets RetrievalReady when codemap and vecgrep are both Ready.
+func (s *DeepStackStatus) computeRetrieval() {
+	var codemap, vecgrep *ReadinessProbe
+	for i := range s.Readiness {
+		r := &s.Readiness[i]
+		switch r.Tool {
+		case "codemap":
+			codemap = r
+		case "vecgrep":
+			vecgrep = r
+		}
+	}
+
+	var gaps []string
+	var details []string
+	if codemap == nil {
+		gaps = append(gaps, "codemap")
+		details = append(details, "codemap: not probed")
+	} else if !codemap.Ready {
+		gaps = append(gaps, "codemap")
+		if codemap.Error != "" {
+			details = append(details, "codemap: "+codemap.Error)
+		} else {
+			details = append(details, "codemap: not ready")
+		}
+	} else {
+		details = append(details, "codemap: ready")
+	}
+
+	if vecgrep == nil {
+		gaps = append(gaps, "vecgrep")
+		details = append(details, "vecgrep: not probed")
+	} else if !vecgrep.Ready {
+		gaps = append(gaps, "vecgrep")
+		if vecgrep.Error != "" {
+			details = append(details, "vecgrep: "+vecgrep.Error)
+		} else {
+			details = append(details, "vecgrep: not ready")
+		}
+	} else {
+		details = append(details, "vecgrep: ready")
+	}
+
+	s.RetrievalGaps = gaps
+	s.RetrievalDetail = strings.Join(details, "; ")
+	s.RetrievalReady = len(gaps) == 0
 }
 
 func runVersion(ctx context.Context, bin string, args []string) string {

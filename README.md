@@ -86,7 +86,10 @@ minerva stack check           # presence, tiered
 minerva stack check --json
 minerva stack deep [workspace]
 minerva stack deep --json
+minerva stack deep --stash    # save report to fcheap (minerva-stack, TTL 30d)
 ```
+
+`stack deep` sets **`retrieval_ready`** only when both **codemap** and **vecgrep** are domain-ready (indexed, not stale). Binary-on-PATH is not enough.
 
 **Binary map (product → PATH command):**
 
@@ -124,11 +127,14 @@ Durable outcomes go through [fcheap](https://github.com/abdul-hamid-achik/file.c
 
 ```bash
 minerva evidence docs
-minerva evidence save ./run-artifacts --kind eval --outcome pass --index
+minerva evidence save ./run-artifacts --kind eval --outcome pass \
+  --tag skill:qa-tester --tag profile:code-reviewer --index
 minerva evidence search minerva-eval
+fcheap list --tag minerva --tag outcome:fail --json
 ```
 
-Tags always include `minerva`; kind adds `minerva-eval` / `minerva-suggest` / `minerva-stack` / `minerva-incident`; optional `outcome:pass|fail|skip`.
+Tags always include `minerva`; kind adds `minerva-eval` / `minerva-suggest` / `minerva-stack` / `minerva-incident`; optional `outcome:pass|fail|skip`.  
+Attribution: `skill:<name>`, `profile:<name>` — `minerva suggest` reads failed stashes for evidence-backed recommendations.
 
 ## MCP
 
