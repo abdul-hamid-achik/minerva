@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#191C1B"/>
+  <g opacity=".13" stroke="#F3F0E8">
+    <path d="M0 90h1200M0 180h1200M0 270h1200M0 360h1200M0 450h1200M0 540h1200"/>
+    <path d="M90 0v630M180 0v630M270 0v630M360 0v630M450 0v630M540 0v630M630 0v630M720 0v630M810 0v630M900 0v630M990 0v630M1080 0v630"/>
+  </g>
+  <circle cx="972" cy="315" r="188" stroke="#F3F0E8" stroke-opacity=".14"/>
+  <circle cx="972" cy="315" r="122" stroke="#C66843" stroke-opacity=".65"/>
+  <path d="M900 267 944 251l28 38 28-38 44 16v81l-72 50-72-50v-81Z" stroke="#F3F0E8" stroke-width="7" stroke-linejoin="round"/>
+  <path d="m934 293 38 57 38-57M972 289v61" stroke="#C66843" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="972" cy="350" r="6" fill="#F3F0E8"/>
+  <path d="M76 106h45" stroke="#C66843" stroke-width="3"/>
+  <text x="135" y="112" fill="#D98B6B" font-family="monospace" font-size="18" letter-spacing="4">MINERVA · AGENT LIBRARY OPERATOR</text>
+  <text x="76" y="236" fill="#F3F0E8" font-family="Arial, sans-serif" font-size="74" font-weight="700" letter-spacing="-4">Know when your agent</text>
+  <text x="76" y="316" fill="#F3F0E8" font-family="Arial, sans-serif" font-size="74" font-weight="700" letter-spacing="-4">stack is actually ready.</text>
+  <text x="80" y="404" fill="#AEB1AA" font-family="Arial, sans-serif" font-size="25">Skills, profiles, retrieval health, and evidence-backed next actions.</text>
+  <text x="80" y="516" fill="#F3F0E8" font-family="monospace" font-size="18" letter-spacing="2">MINERVACLI.DEV</text>
+</svg>

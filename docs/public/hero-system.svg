@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 560" fill="none">
+  <circle cx="280" cy="280" r="246" stroke="#F3F0E8" stroke-opacity=".12"/>
+  <circle cx="280" cy="280" r="184" stroke="#F3F0E8" stroke-opacity=".1" stroke-dasharray="4 10"/>
+  <circle cx="280" cy="280" r="118" fill="#202420" stroke="#C66843" stroke-opacity=".65"/>
+  <path d="M226 244.5 260 232l20 28 20-28 34 12.5v62L280 344l-54-37.5v-62Z" stroke="#F3F0E8" stroke-width="5" stroke-linejoin="round"/>
+  <path d="m252 264 28 43 28-43M280 260v47" stroke="#C66843" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="280" cy="307" r="4" fill="#F3F0E8"/>
+  <g fill="#191C1B" stroke="#F3F0E8" stroke-opacity=".25">
+    <circle cx="280" cy="34" r="20"/>
+    <circle cx="493" cy="157" r="20"/>
+    <circle cx="493" cy="403" r="20"/>
+    <circle cx="280" cy="526" r="20"/>
+    <circle cx="67" cy="403" r="20"/>
+    <circle cx="67" cy="157" r="20"/>
+  </g>
+  <g fill="#C66843">
+    <circle cx="280" cy="34" r="4"/>
+    <circle cx="493" cy="157" r="4"/>
+    <circle cx="493" cy="403" r="4"/>
+    <circle cx="280" cy="526" r="4"/>
+    <circle cx="67" cy="403" r="4"/>
+    <circle cx="67" cy="157" r="4"/>
+  </g>
+  <path d="M280 54v58M476 167l-50 29M476 393l-50-29M280 506v-58M84 393l50-29M84 167l50 29" stroke="#F3F0E8" stroke-opacity=".14"/>
+  <g fill="#F3F0E8" fill-opacity=".58" font-family="monospace" font-size="10" letter-spacing="1.4">
+    <text x="250" y="9">LIBRARY</text>
+    <text x="498" y="160">MCP</text>
+    <text x="500" y="406">PROOF</text>
+    <text x="250" y="558">PROFILE</text>
+    <text x="10" y="406">STACK</text>
+    <text x="12" y="160">SIGNAL</text>
+  </g>
+</svg>

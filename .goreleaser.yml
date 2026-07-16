@@ -1,0 +1,70 @@
+version: 2
+
+project_name: minerva
+
+builds:
+  - id: minerva
+    main: ./cmd/minerva
+    binary: minerva
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/abdul-hamid-achik/minerva/internal/version.Version={{ .Version }}
+      - -X github.com/abdul-hamid-achik/minerva/internal/version.Commit={{ .Commit }}
+      - -X github.com/abdul-hamid-achik/minerva/internal/version.Date={{ .Date }}
+
+archives:
+  - id: minerva
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'Merge pull request'
+      - 'Merge branch'
+
+release:
+  draft: false
+  prerelease: auto
+
+homebrew_casks:
+  - name: minerva
+    ids:
+      - minerva
+    binaries:
+      - minerva
+    repository:
+      owner: abdul-hamid-achik
+      name: homebrew-tap
+      branch: main
+      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+    directory: Casks
+    homepage: https://minervacli.dev
+    description: Agent library operator and stack readiness CLI/MCP
+    commit_msg_template: 'chore: update Minerva to {{ .Tag }}'
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/minerva"]
+          end
+    caveats: |
+      Run `minerva init` to create the shared agent library, then
+      `minerva stack deep` for an evidence-backed readiness report.

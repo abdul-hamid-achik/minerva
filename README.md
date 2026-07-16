@@ -30,6 +30,10 @@ Built with Go + Cobra + MCP stdio (same family as Bob / Cortex).
 ### Install / build
 
 ```bash
+# Homebrew (recommended for macOS and Linux)
+brew install --cask abdul-hamid-achik/tap/minerva
+
+# From source
 task build              # bin/minerva
 # or
 go install github.com/abdul-hamid-achik/minerva/cmd/minerva@latest
@@ -216,6 +220,16 @@ task cairn-prod    # browser specs against https://minervacli.dev
 - CLI contracts: `specs/*.yml` ([glyph](https://github.com/abdul-hamid-achik/glyphrun))
 - Docs site: `docs/` → deploy to **minervacli.dev** (Vercel)
 - Browser contracts: `browser-specs/*.yml` ([cairn](https://github.com/abdul-hamid-achik/cairntrace))
+
+## Releases
+
+Tags matching `v*` run GoReleaser in GitHub Actions. The workflow publishes
+macOS and Linux archives for amd64/arm64, creates a GitHub Release with
+checksums, and updates `Casks/minerva.rb` in
+[`abdul-hamid-achik/homebrew-tap`](https://github.com/abdul-hamid-achik/homebrew-tap).
+
+Cross-repository publishing requires the `HOMEBREW_TAP_TOKEN` repository
+secret with Contents read/write access to the tap repository.
 
 ## License
 

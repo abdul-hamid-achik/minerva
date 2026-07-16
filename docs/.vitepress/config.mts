@@ -58,24 +58,26 @@ export default defineConfig({
 
   head: [
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
-    ['meta', { name: 'theme-color', content: '#0b1220' }],
+    ['meta', { name: 'theme-color', content: '#191c1b' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'Minerva' }],
     ['meta', { property: 'og:url', content: siteURL }],
     ['meta', { property: 'og:title', content: 'Minerva' }],
     ['meta', { property: 'og:description', content: defaultDescription }],
+    ['meta', { property: 'og:image', content: `${siteURL}/og-minerva.png` }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:image', content: `${siteURL}/og-minerva.png` }],
     ['script', { type: 'application/ld+json' }, structuredData],
   ],
 
   themeConfig: {
-    logo: { src: '/favicon.svg', alt: 'Minerva' },
+    logo: { src: '/logo-mark.svg', alt: 'Minerva' },
     siteTitle: 'Minerva',
     nav: [
-      { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Start', link: '/guide/getting-started' },
+      { text: 'Concepts', link: '/guide/concepts' },
       { text: 'CLI', link: '/guide/cli' },
-      { text: 'Stack', link: '/guide/stack' },
-      { text: 'MCP', link: '/guide/mcp' },
+      { text: 'Stack readiness', link: '/guide/stack' },
       {
         text: 'GitHub',
         link: repositoryURL,
@@ -112,8 +114,8 @@ export default defineConfig({
       { icon: 'github', link: repositoryURL },
     ],
     footer: {
-      message: 'Agent library operator · stack readiness orchestrator',
-      copyright: 'MIT · Built for the local intelligence stack',
+      message: 'Know what is installed. Know what is ready. Act on evidence.',
+      copyright: 'Minerva · Open source under MIT',
     },
     search: {
       provider: 'local',
