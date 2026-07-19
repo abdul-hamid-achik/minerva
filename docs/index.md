@@ -1,12 +1,12 @@
 ---
 layout: home
 title: Honest readiness for your agent stack
-description: Minerva keeps skills and profiles organized, verifies the local intelligence stack, and turns real evidence into exact next actions.
+description: Minerva operates the shared agent library, verifies stack readiness, packages portable bundles, and turns evidence into exact next actions.
 pageClass: minerva-home
 hero:
   name: Minerva · Agent library operator
   text: Know when your agent stack is actually ready.
-  tagline: One control plane for skills, profiles, retrieval health, and evidence-backed next actions. Minerva reads the signals your tools already own—then gives operators an honest answer.
+  tagline: One control plane for skills, profiles, retrieval health, portable libraries, and evidence-backed next actions. Minerva reads the signals your tools already own—then gives operators an honest answer.
   image:
     src: /hero-system.svg
     alt: Minerva connecting library, stack, signal, MCP, proof, and profile systems

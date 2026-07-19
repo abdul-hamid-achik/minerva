@@ -1,5 +1,8 @@
 # Minerva
 
+[![Release](https://img.shields.io/github/v/release/abdul-hamid-achik/minerva)](https://github.com/abdul-hamid-achik/minerva/releases)
+[![Changelog](https://img.shields.io/badge/changelog-0.2.0-blue)](./CHANGELOG.md)
+
 Agent **library operator** and **stack readiness** CLI/MCP for the shared `~/.agents` tree.
 
 Minerva manages skills and profiles on disk (the same layout [local-agent](https://github.com/abdul-hamid-achik/local-agent) loads), and probes companion tools (bob, cortex, mcphub, codemap, vecgrep, …) using **real binary names** and tiered health.
@@ -246,6 +249,8 @@ task cairn-prod    # browser specs against https://minervacli.dev
 - Browser contracts: `browser-specs/*.yml` ([cairn](https://github.com/abdul-hamid-achik/cairntrace))
 
 ## Releases
+
+See [CHANGELOG.md](./CHANGELOG.md) for user-facing notes.
 
 Tags matching `v*` run GoReleaser in GitHub Actions. The workflow publishes
 macOS and Linux archives for amd64/arm64, creates a GitHub Release with

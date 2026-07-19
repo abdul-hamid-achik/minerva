@@ -11,8 +11,11 @@ A shared agent library, a tiered inventory of your local stack, and an honest de
 | I want to… | Start with |
 |---|---|
 | Organize skills and agent profiles | `minerva init`, then `minerva skill list` |
+| One honest operator dashboard | `minerva status` (alias: `doctor`) |
 | Audit installed intelligence tools | `minerva stack check` |
-| Verify retrieval and operator readiness | `minerva stack deep` |
+| Verify retrieval and operator readiness | `minerva stack deep` / `status --require-retrieval` |
+| Portable library for a team machine | `minerva library export` / `import` / `lint` |
+| Wire a profile into local-agent | `minerva bridge show <profile>` |
 | Connect an agent harness | [MCP integration](/guide/mcp) |
 
 ## Install
@@ -62,13 +65,16 @@ minerva init
 ```bash
 minerva skill list
 minerva profile list
-minerva stack check          # presence, correct binaries, tiers
+minerva status                # library + presence + deep + next actions
+minerva stack check          # presence only, tiered
 minerva stack deep           # readiness + cortex + mcphub
 minerva stack deep --stash   # save report to fcheap
-minerva suggest              # ranked next actions
+minerva suggest              # ranked next actions (prefer profile membership)
+minerva library lint
+minerva bridge show <profile>
 ```
 
-The fast check answers “what is present?” The deep check asks each owning tool whether its domain is actually ready. Read [Stack readiness](/guide/stack) before using the result as an agent gate.
+`status` is the default operator loop. The fast stack check answers “what is present?” The deep check asks each owning tool whether its domain is actually ready. Read [Stack readiness](/guide/stack) and [CLI](/guide/cli) for exit-code gates (`--require-retrieval`, `--strict`).
 
 ## Wire MCP (via MCPHub)
 
