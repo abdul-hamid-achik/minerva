@@ -67,7 +67,8 @@ tasks:
 
   dev:
     desc: Run without building
-    cmds: [go run {{.MAIN}} {{.CLI_ARGS}}]
+    cmds:
+      - go run {{.MAIN}} {{.CLI_ARGS}}
 
   install:
     desc: Install to GOPATH/bin
@@ -89,7 +90,17 @@ tasks:
     desc: Run fast Glyphrun specs (skip slow stack deep)
     cmds:
       - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN}}
-      - glyph run ./specs/version.yml ./specs/help.yml ./specs/stack_check_json.yml ./specs/init_and_skill.yml ./specs/evidence_docs.yml --format md
+      - >
+        glyph run
+        ./specs/version.yml
+        ./specs/help.yml
+        ./specs/stack_check_json.yml
+        ./specs/init_and_skill.yml
+        ./specs/evidence_docs.yml
+        ./specs/library_and_profile.yml
+        ./specs/status_and_bridge.yml
+        ./specs/skill_update_compare.yml
+        --format md
 
   docs:dev:
     desc: VitePress docs site (http://127.0.0.1:5173)

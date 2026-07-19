@@ -23,6 +23,8 @@ type Event struct {
 }
 
 // Summary is aggregate analytics.
+// Note: this is Minerva-local only (CLI/MCP mutations). It does not observe
+// local-agent session skill loads or harness tool calls (see mcphub/cortex).
 type Summary struct {
 	TotalEvents        int            `json:"total_events"`
 	SkillActivations   map[string]int `json:"skill_activations"`
@@ -31,6 +33,8 @@ type Summary struct {
 	LastActivity       time.Time      `json:"last_activity"`
 	TopSkills          []string       `json:"top_skills"`
 	TopProfiles        []string       `json:"top_profiles"`
+	// Note is always set so operators do not confuse this with harness telemetry.
+	Note string `json:"note,omitempty"`
 }
 
 // TopSkillEntry is a skill with activation count.
@@ -144,6 +148,7 @@ func (s *Store) Summarize() Summary {
 	summary := Summary{
 		SkillActivations: make(map[string]int),
 		ProfileSwitches:  make(map[string]int),
+		Note:             "Minerva-local events only (not local-agent session usage or mcphub tool_calls)",
 	}
 
 	for _, e := range s.events {

@@ -9,7 +9,9 @@ task glyph-fast   # quick suite
 task glyph        # full suite including stack deep
 ```
 
-Covers version, help, stack check JSON binary map, isolated skill create, evidence docs, and `retrieval_ready` field presence.
+Covers version, help, stack check JSON binary map, isolated skill create, evidence docs,
+`retrieval_ready` field presence, library export/lint + profile add-skills, status/bridge,
+and skill update/compare unified diffs.
 
 ## Cairn — docs site contracts
 

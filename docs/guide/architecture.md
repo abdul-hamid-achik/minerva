@@ -7,12 +7,16 @@ internal/
   mcp/            MCP stdio server
   skill/          SKILL.md discovery + Minerva activation
   profile/        agent.yaml management
-  templates/      role prompt seeds
+  templates/      role prompts (builtin + disk)
+  library/        export/import/lint portable bundles
+  bridge/         local-agent integration snippets
   monitor/        presence (bins + tiers)
   integration/    deep readiness (sibling CLIs)
+  status/         unified doctor/status report
   suggest/        shared suggestion engine
   analytics/      append-safe events
-  evidence/       fcheap tag conventions
+  evidence/       fcheap tag conventions + close receipts
+  textdiff/       unified diffs for compare
   version/
 docs/             VitePress site (this site)
 specs/            Glyphrun CLI contracts

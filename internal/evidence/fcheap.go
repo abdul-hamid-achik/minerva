@@ -219,7 +219,7 @@ func ListByTags(ctx context.Context, tags ...string) ([]StashEntry, error) {
 	return entries, nil
 }
 
-// ListOutcomeFails returns minerva stashes tagged outcome:fail.
+// ListOutcomeFails returns minerva stashes tagged outcome:fail (includes closed).
 func ListOutcomeFails(ctx context.Context) ([]StashEntry, error) {
 	return ListByTags(ctx, TagMinerva, TagOutcomeFail)
 }
@@ -227,6 +227,155 @@ func ListOutcomeFails(ctx context.Context) ([]StashEntry, error) {
 // ListEvalFails returns eval stashes that failed.
 func ListEvalFails(ctx context.Context) ([]StashEntry, error) {
 	return ListByTags(ctx, TagMinerva, TagEval, TagOutcomeFail)
+}
+
+// TagClosesPrefix marks a close-receipt that resolves a prior fail stash.
+const TagClosesPrefix = "closes:"
+
+// TagOutcomeClosed is applied to close receipts (in addition to outcome:pass).
+const TagOutcomeClosed = "outcome:closed"
+
+// CloseRequest closes an open fail by writing a pass/closed receipt stash.
+// fcheap has no in-place re-tag; Minerva links receipts via closes:<id>.
+type CloseRequest struct {
+	StashID string // original fail stash id
+	Note    string // optional operator note
+	Kind    string // eval|stack|incident|other (default: eval)
+}
+
+// CloseResult is the close receipt result.
+type CloseResult struct {
+	ClosedID  string      `json:"closed_id"`
+	ReceiptID string      `json:"receipt_id,omitempty"`
+	Save      *SaveResult `json:"save,omitempty"`
+}
+
+// Close writes a durable close receipt for a fail stash.
+// Suggest / status treat fails with a matching closes:<id> receipt as resolved.
+func Close(ctx context.Context, req CloseRequest) (*CloseResult, error) {
+	id := strings.TrimSpace(req.StashID)
+	if id == "" {
+		return nil, fmt.Errorf("stash id is required")
+	}
+	kind := strings.TrimSpace(req.Kind)
+	if kind == "" {
+		kind = "eval"
+	}
+
+	// Best-effort: pull attribution tags from the original stash.
+	extra := []string{TagClosesPrefix + id, TagOutcomeClosed}
+	if info, err := Info(ctx, id); err == nil {
+		skills, profiles := parseSkillProfileTags(info.Tags)
+		for _, s := range skills {
+			extra = append(extra, "skill:"+s)
+		}
+		for _, p := range profiles {
+			extra = append(extra, "profile:"+p)
+		}
+	}
+
+	payload := map[string]any{
+		"action":    "close",
+		"closed_id": id,
+		"note":      req.Note,
+		"at":        time.Now().UTC().Format(time.RFC3339),
+	}
+	res, err := SaveJSON(ctx, "close-"+id, kind, "pass", extra, payload)
+	if err != nil {
+		return nil, err
+	}
+	out := &CloseResult{ClosedID: id, Save: res}
+	if res != nil {
+		out.ReceiptID = res.ID
+	}
+	return out, nil
+}
+
+// Info fetches stash metadata via fcheap info --json.
+func Info(ctx context.Context, stashID string) (*StashEntry, error) {
+	if _, err := exec.LookPath("fcheap"); err != nil {
+		return nil, fmt.Errorf("fcheap not found in PATH")
+	}
+	if strings.TrimSpace(stashID) == "" {
+		return nil, fmt.Errorf("stash id is required")
+	}
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, "fcheap", "info", stashID, "--json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("fcheap info: %w\n%s", err, bytes.TrimSpace(out))
+	}
+	raw := bytes.TrimSpace(out)
+	var entry StashEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		// Tolerate envelope shapes.
+		var env struct {
+			OK   bool       `json:"ok"`
+			Data StashEntry `json:"data"`
+		}
+		if err2 := json.Unmarshal(raw, &env); err2 != nil || env.Data.ID == "" {
+			return nil, fmt.Errorf("parse fcheap info: %w", err)
+		}
+		entry = env.Data
+	}
+	if entry.ID == "" {
+		entry.ID = stashID
+	}
+	entry.Skills, entry.Profiles = parseSkillProfileTags(entry.Tags)
+	return &entry, nil
+}
+
+// ListClosedIDs returns stash ids that have a Minerva close receipt.
+func ListClosedIDs(ctx context.Context) (map[string]bool, error) {
+	// Close receipts carry outcome:closed + closes:<id>.
+	entries, err := ListByTags(ctx, TagMinerva, TagOutcomeClosed)
+	if err != nil {
+		// Fallback: pass receipts may still have closes: tags if older.
+		entries, err = ListByTags(ctx, TagMinerva, TagOutcomePass)
+		if err != nil {
+			return nil, err
+		}
+	}
+	closed := make(map[string]bool)
+	for _, e := range entries {
+		for _, t := range e.Tags {
+			if strings.HasPrefix(t, TagClosesPrefix) {
+				id := strings.TrimSpace(strings.TrimPrefix(t, TagClosesPrefix))
+				if id != "" {
+					closed[id] = true
+				}
+			}
+		}
+	}
+	return closed, nil
+}
+
+// ListOpenOutcomeFails returns fail stashes without a close receipt.
+func ListOpenOutcomeFails(ctx context.Context) ([]StashEntry, error) {
+	fails, err := ListOutcomeFails(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(fails) == 0 {
+		return nil, nil
+	}
+	closed, err := ListClosedIDs(ctx)
+	if err != nil {
+		// If we cannot list closes, surface all fails (honest degradation).
+		return fails, nil
+	}
+	open := make([]StashEntry, 0, len(fails))
+	for _, f := range fails {
+		if closed[f.ID] {
+			continue
+		}
+		open = append(open, f)
+	}
+	return open, nil
 }
 
 func parseSkillProfileTags(tags []string) (skills, profiles []string) {
@@ -294,13 +443,19 @@ Tags always include "minerva". Kind adds one of:
   minerva-eval | minerva-suggest | minerva-stack | minerva-incident
 
 Optional outcome tags:
-  outcome:pass | outcome:fail | outcome:skip
+  outcome:pass | outcome:fail | outcome:skip | outcome:closed
+
+Close loop (fcheap has no in-place re-tag):
+  minerva evidence close <fail-stash-id> [--note "..."]
+  → saves a pass receipt tagged closes:<id> + outcome:closed
+  → open fails = outcome:fail without a matching closes: receipt
 
 Examples:
   minerva evidence save ./run-artifacts --kind eval --outcome pass --tag skill:qa-tester --index
+  minerva evidence close abc123 --note "fixed index"
   minerva stack deep --stash
   fcheap list --tag minerva --tag outcome:fail --json
-  fcheap list --tag minerva-eval --json
+  fcheap list --tag minerva --tag outcome:closed --json
 
 Attribution tags (optional, enable evidence-backed suggest):
   skill:<name>    profile:<name>

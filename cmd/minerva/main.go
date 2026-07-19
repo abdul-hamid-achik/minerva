@@ -12,6 +12,9 @@ import (
 
 func main() {
 	if err := cli.Execute(); err != nil {
+		if code, ok := cli.AsExitCode(err); ok {
+			os.Exit(code)
+		}
 		fmt.Fprintf(os.Stderr, "minerva: %v\n", err)
 		os.Exit(1)
 	}

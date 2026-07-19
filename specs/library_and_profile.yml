@@ -1,0 +1,62 @@
+version: 1
+name: minerva_library_and_profile
+intent: |
+    operators can init an isolated agents root, create a profile with add-skills,
+    lint the library, and export a portable bundle without touching ~/.agents.
+target:
+    cmd: ["./bin/minerva", "library", "lint"]
+    cwd: "."
+    env:
+        MINERVA_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/lib-agents"
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: |
+            set -e
+            go build -o ./bin/minerva ./cmd/minerva
+            ROOT="$PWD/.glyphrun/tmp/lib-agents"
+            rm -rf "$ROOT" "$PWD/.glyphrun/tmp/lib-export.tgz"
+            export MINERVA_AGENTS_DIR="$ROOT"
+            ./bin/minerva init
+            ./bin/minerva skill create alpha "alpha body" -d "alpha skill"
+            ./bin/minerva profile create dev "you are dev"
+            ./bin/minerva profile add-skills dev alpha
+            ./bin/minerva library export "$PWD/.glyphrun/tmp/lib-export.tgz"
+          cwd: "."
+          timeoutMs: 90000
+steps:
+    - wait:
+        screen:
+            contains: "Library lint"
+        timeoutMs: 10000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: lint_ok
+      description: library lint reports no errors for a clean library
+      verify:
+        command:
+            run: |
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/lib-agents" ./bin/minerva library lint 2>&1 | grep -qE 'ok \(no errors\)|errors=0'
+    - id: profile_has_skill
+      description: add-skills persisted alpha on profile dev
+      verify:
+        command:
+            run: |
+                grep -q alpha .glyphrun/tmp/lib-agents/agents/dev/agent.yaml
+    - id: export_tarball_exists
+      description: library export wrote a non-empty tarball
+      verify:
+        command:
+            run: test -s .glyphrun/tmp/lib-export.tgz
+    - id: exits_zero
+      description: library lint exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:26d89f4d0fb8c02c8a01ebdd584d9bd6994a8046598fea745e6a0c1e1b65142d

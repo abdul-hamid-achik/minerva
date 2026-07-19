@@ -14,13 +14,18 @@ Exposes library, stack, templates, evidence, and suggest tools over **stdio** fo
 | `minerva_profile_list` / `show` | read-only |
 | `minerva_stack_check` | read-only |
 | `minerva_stack_deep` | read-only (`stash` optional) |
+| `minerva_status` | read-only (unified doctor) |
 | `minerva_suggest` | read-only |
 | `minerva_analytics` | read-only |
 | `minerva_template_list` / `show` | read-only |
-| `minerva_evidence_docs` | read-only |
-| `minerva_skill_create` / `activate` / … | effectful |
-| `minerva_evidence_save` | effectful |
-| `minerva_profile_*` mutations | effectful |
+| `minerva_library_lint` | read-only |
+| `minerva_bridge_show` | read-only |
+| `minerva_evidence_docs` / `search` | read-only |
+| `minerva_skill_create` / `update` / `activate` / … | effectful |
+| `minerva_template_apply` | effectful |
+| `minerva_library_export` / `import` | effectful |
+| `minerva_evidence_save` / `close` | effectful |
+| `minerva_profile_*` mutations (`add_skills`, `update_model`, `update_mcp`, …) | effectful |
 
 ## MCPHub
 

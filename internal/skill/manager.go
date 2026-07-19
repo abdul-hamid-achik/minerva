@@ -441,6 +441,66 @@ func (m *Manager) Create(dir, name, description, content string) error {
 		return fmt.Errorf("create skill directory: %w", err)
 	}
 
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := writeSkillFile(skillPath, name, description, content); err != nil {
+		return err
+	}
+
+	return m.LoadAll()
+}
+
+// Update rewrites an existing skill's description and/or body.
+// Empty description or content arguments keep the current value when
+// updateDescription/updateContent are false.
+func (m *Manager) Update(name string, description *string, content *string) error {
+	if err := validateSkillName(name); err != nil {
+		return fmt.Errorf("invalid skill name: %w", err)
+	}
+
+	m.mu.RLock()
+	var existing *Skill
+	for _, s := range m.skills {
+		if s.Name == name {
+			copy := *s
+			existing = &copy
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if existing == nil {
+		return fmt.Errorf("skill %q not found", name)
+	}
+	if description == nil && content == nil {
+		return fmt.Errorf("nothing to update: provide description and/or content")
+	}
+
+	desc := existing.Description
+	body := existing.Content
+	if description != nil {
+		desc = *description
+		if len(desc) > MaxSkillDescriptionBytes {
+			return fmt.Errorf("description exceeds %d bytes", MaxSkillDescriptionBytes)
+		}
+	}
+	if content != nil {
+		body = *content
+		if len(body) > MaxSkillBodyBytes {
+			return fmt.Errorf("content exceeds %d bytes", MaxSkillBodyBytes)
+		}
+	}
+
+	path := existing.Path
+	if path == "" {
+		return fmt.Errorf("skill %q has no path on disk", name)
+	}
+	if err := writeSkillFile(path, name, desc, body); err != nil {
+		return err
+	}
+	return m.LoadAll()
+}
+
+func writeSkillFile(path, name, description, content string) error {
 	var b strings.Builder
 	b.WriteString("---\n")
 	// Quote scalars so descriptions with ":" or newlines cannot break YAML.
@@ -453,13 +513,10 @@ func (m *Manager) Create(dir, name, description, content string) error {
 	if !strings.HasSuffix(content, "\n") {
 		b.WriteString("\n")
 	}
-
-	skillPath := filepath.Join(skillDir, "SKILL.md")
-	if err := os.WriteFile(skillPath, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		return fmt.Errorf("write skill file: %w", err)
 	}
-
-	return m.LoadAll()
+	return nil
 }
 
 // Delete removes a skill directory.

@@ -1,0 +1,61 @@
+version: 1
+name: minerva_skill_update_compare
+intent: |
+    operators can update a skill body and see a unified diff when comparing
+    two skills in an isolated agents root.
+target:
+    cmd: ["./bin/minerva", "skill", "compare", "a", "b"]
+    cwd: "."
+    env:
+        MINERVA_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/skill-cmp"
+terminal:
+    cols: 100
+    rows: 30
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: |
+            set -e
+            go build -o ./bin/minerva ./cmd/minerva
+            ROOT="$PWD/.glyphrun/tmp/skill-cmp"
+            rm -rf "$ROOT"
+            export MINERVA_AGENTS_DIR="$ROOT"
+            ./bin/minerva init
+            ./bin/minerva skill create a "line one" -d "skill a"
+            ./bin/minerva skill create b "line one" -d "skill b"
+            ./bin/minerva skill update b --content "line two"
+          cwd: "."
+          timeoutMs: 90000
+steps:
+    - wait:
+        screen:
+            contains: "--- a"
+        timeoutMs: 5000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 3000
+outcomes:
+    - id: unified_diff_header
+      description: compare prints unified-diff headers
+      verify:
+        screen:
+            contains: "--- a"
+    - id: shows_change
+      description: diff shows the updated line
+      verify:
+        command:
+            run: |
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/skill-cmp" ./bin/minerva skill compare a b | grep -qE '^\+line two|line two'
+    - id: update_persisted
+      description: skill update rewrote SKILL.md body
+      verify:
+        command:
+            run: |
+                grep -q 'line two' .glyphrun/tmp/skill-cmp/skills/b/SKILL.md
+    - id: exits_zero
+      description: skill compare exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:a44c3b867f7525dfeed44fab5fe559c68ada54707c7a4740c1f6224e614bc351

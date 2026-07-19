@@ -14,13 +14,17 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/abdul-hamid-achik/minerva/internal/analytics"
+	"github.com/abdul-hamid-achik/minerva/internal/bridge"
 	"github.com/abdul-hamid-achik/minerva/internal/evidence"
 	"github.com/abdul-hamid-achik/minerva/internal/integration"
+	"github.com/abdul-hamid-achik/minerva/internal/library"
 	"github.com/abdul-hamid-achik/minerva/internal/monitor"
 	"github.com/abdul-hamid-achik/minerva/internal/profile"
 	"github.com/abdul-hamid-achik/minerva/internal/skill"
+	"github.com/abdul-hamid-achik/minerva/internal/status"
 	"github.com/abdul-hamid-achik/minerva/internal/suggest"
 	"github.com/abdul-hamid-achik/minerva/internal/templates"
+	"github.com/abdul-hamid-achik/minerva/internal/textdiff"
 	"github.com/abdul-hamid-achik/minerva/internal/version"
 )
 
@@ -99,8 +103,8 @@ func (s *Server) register() {
 		"Return the complete markdown body of a skill by name.",
 	), s.handleSkillShow)
 	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_skill_compare", "Compare two skills side by side",
-		"Return the content of two skills for comparison.",
+		"minerva_skill_compare", "Compare two skills (unified diff)",
+		"Return a unified diff of two skill bodies. Set side_by_side=true for full bodies.",
 	), s.handleSkillCompare)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "minerva_skill_create",
@@ -108,6 +112,12 @@ func (s *Server) register() {
 		Description: "Create a new skill with a name, description, and markdown content. The skill is written to the skills directory.",
 		Annotations: &sdkmcp.ToolAnnotations{Title: "Create a new skill", ReadOnlyHint: false},
 	}, s.handleSkillCreate)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_skill_update",
+		Title:       "Update an existing skill",
+		Description: "Update a skill's description and/or markdown body. Omit a field to leave it unchanged.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Update an existing skill", ReadOnlyHint: false},
+	}, s.handleSkillUpdate)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "minerva_skill_activate",
 		Title:       "Activate a skill (Minerva-local)",
@@ -137,8 +147,8 @@ func (s *Server) register() {
 		"Return the complete configuration of an agent profile by name, including its system prompt.",
 	), s.handleProfileShow)
 	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_profile_compare", "Compare two profiles side by side",
-		"Return the full configuration of two profiles for comparison.",
+		"minerva_profile_compare", "Compare two profiles (unified diff)",
+		"Return a unified YAML projection diff of two profiles. Set side_by_side=true for summary fields.",
 	), s.handleProfileCompare)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "minerva_profile_create",
@@ -154,10 +164,40 @@ func (s *Server) register() {
 	}, s.handleProfileUpdatePrompt)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "minerva_profile_update_skills",
-		Title:       "Update a profile's skills",
-		Description: "Update the skills list for an existing agent profile.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's skills", ReadOnlyHint: false},
+		Title:       "Replace a profile's skills",
+		Description: "Replace the full skills list for an existing agent profile.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Replace a profile's skills", ReadOnlyHint: false},
 	}, s.handleProfileUpdateSkills)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_profile_add_skills",
+		Title:       "Add skills to a profile",
+		Description: "Merge skill names into a profile without dropping existing skills (durable local-agent SSOT).",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Add skills to a profile", ReadOnlyHint: false},
+	}, s.handleProfileAddSkills)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_profile_remove_skills",
+		Title:       "Remove skills from a profile",
+		Description: "Remove skill names from a profile's skills list.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Remove skills from a profile", ReadOnlyHint: false},
+	}, s.handleProfileRemoveSkills)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_profile_update_model",
+		Title:       "Update a profile's model",
+		Description: "Set the model field on an existing agent profile.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's model", ReadOnlyHint: false},
+	}, s.handleProfileUpdateModel)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_profile_update_mcp",
+		Title:       "Update a profile's MCP allowlist",
+		Description: "Replace the mcp_servers allowlist for an existing agent profile.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's MCP allowlist", ReadOnlyHint: false},
+	}, s.handleProfileUpdateMCP)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_profile_update_desc",
+		Title:       "Update a profile's description",
+		Description: "Set the description field on an existing agent profile.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's description", ReadOnlyHint: false},
+	}, s.handleProfileUpdateDesc)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "minerva_profile_delete",
 		Title:       "Delete an agent profile",
@@ -174,6 +214,10 @@ func (s *Server) register() {
 		"minerva_stack_deep", "Deep stack readiness probe",
 		"Compose bob check/context, cortex doctor, mcphub stats, and optional readiness probes (codemap/vecgrep/fcheap/tvault/monitor). Workspace defaults to cwd.",
 	), s.handleStackDeep)
+	sdkmcp.AddTool(s.srv, readOnlyTool(
+		"minerva_status", "Unified library + stack + evidence status",
+		"One operator report: library inventory, presence, deep readiness, open evidence fails, top next actions.",
+	), s.handleStatus)
 
 	// Analytics
 	sdkmcp.AddTool(s.srv, readOnlyTool(
@@ -196,18 +240,58 @@ func (s *Server) register() {
 		"minerva_template_show", "Show a template",
 		"Return a template's full system prompt and recommended skills by name.",
 	), s.handleTemplateShow)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_template_apply",
+		Title:       "Apply a template to a profile",
+		Description: "Create or update an agent profile from a role template (builtin or disk; prompt + recommended skills).",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Apply a template to a profile", ReadOnlyHint: false},
+	}, s.handleTemplateApply)
+
+	// Library portable bundles
+	sdkmcp.AddTool(s.srv, readOnlyTool(
+		"minerva_library_lint", "Lint the shared agents library",
+		"Check skills/profiles/templates for missing refs, empty prompts, orphans, and possible secrets.",
+	), s.handleLibraryLint)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_library_export",
+		Title:       "Export agents library bundle",
+		Description: "Export skills/profiles/templates to a directory or .tar.gz path.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Export agents library bundle", ReadOnlyHint: false},
+	}, s.handleLibraryExport)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_library_import",
+		Title:       "Import agents library bundle",
+		Description: "Import a directory or .tar.gz library bundle into the agents root.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Import agents library bundle", ReadOnlyHint: false},
+	}, s.handleLibraryImport)
+
+	// Bridge / local-agent integration
+	sdkmcp.AddTool(s.srv, readOnlyTool(
+		"minerva_bridge_show", "local-agent bridge snippet for a profile",
+		"Generate launch + MCP trust documentation for a profile (md|shell|yaml).",
+	), s.handleBridgeShow)
 
 	// Evidence via fcheap conventions
 	sdkmcp.AddTool(s.srv, readOnlyTool(
 		"minerva_evidence_docs", "Minerva fcheap tag conventions",
 		"Return the standard tag scheme for stashing Minerva eval/stack outcomes in fcheap.",
 	), s.handleEvidenceDocs)
+	sdkmcp.AddTool(s.srv, readOnlyTool(
+		"minerva_evidence_search", "Search Minerva evidence in fcheap",
+		"Search fcheap stashes (defaults to minerva-tagged query).",
+	), s.handleEvidenceSearch)
 	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
 		Name:        "minerva_evidence_save",
 		Title:       "Save evidence via fcheap",
 		Description: "Stash a file/directory with Minerva tags (minerva, minerva-eval, outcome:pass/fail, …) using fcheap. Does not store secrets.",
 		Annotations: &sdkmcp.ToolAnnotations{Title: "Save evidence via fcheap", ReadOnlyHint: false},
 	}, s.handleEvidenceSave)
+	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
+		Name:        "minerva_evidence_close",
+		Title:       "Close a fail evidence stash",
+		Description: "Write a pass/closed receipt (closes:<id>) for a prior fail stash. Does not mutate the original stash.",
+		Annotations: &sdkmcp.ToolAnnotations{Title: "Close a fail evidence stash", ReadOnlyHint: false},
+	}, s.handleEvidenceClose)
 }
 
 func readOnlyTool(name, title, description string) *sdkmcp.Tool {
@@ -229,14 +313,21 @@ type SkillNameInput struct {
 }
 
 type SkillCompareInput struct {
-	NameA string `json:"name_a" jsonschema:"required, first skill name"`
-	NameB string `json:"name_b" jsonschema:"required, second skill name"`
+	NameA      string `json:"name_a" jsonschema:"required, first skill name"`
+	NameB      string `json:"name_b" jsonschema:"required, second skill name"`
+	SideBySide bool   `json:"side_by_side,omitempty" jsonschema:"if true, return full bodies instead of unified diff"`
 }
 
 type SkillCreateInput struct {
 	Name        string `json:"name" jsonschema:"required, unique skill name"`
 	Description string `json:"description,omitempty" jsonschema:"one-line description of what the skill does"`
 	Content     string `json:"content" jsonschema:"required, markdown body of the skill"`
+}
+
+type SkillUpdateInput struct {
+	Name        string  `json:"name" jsonschema:"required, skill name"`
+	Description *string `json:"description,omitempty" jsonschema:"new one-line description; omit to keep current"`
+	Content     *string `json:"content,omitempty" jsonschema:"new markdown body; omit to keep current"`
 }
 
 func (s *Server) handleSkillList(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
@@ -261,9 +352,19 @@ func (s *Server) handleSkillCompare(ctx context.Context, _ *sdkmcp.CallToolReque
 	if !okB {
 		return errorResult(fmt.Sprintf("skill %q not found", in.NameB)), nil, nil
 	}
+	if in.SideBySide {
+		result := map[string]any{
+			"skill_a": map[string]any{"name": in.NameA, "content": contentA},
+			"skill_b": map[string]any{"name": in.NameB, "content": contentB},
+		}
+		return textResult(result), result, nil
+	}
+	diff := textdiff.Unified(in.NameA, in.NameB, contentA, contentB)
 	result := map[string]any{
-		"skill_a": map[string]any{"name": in.NameA, "content": contentA},
-		"skill_b": map[string]any{"name": in.NameB, "content": contentB},
+		"identical": diff == "",
+		"diff":      diff,
+		"name_a":    in.NameA,
+		"name_b":    in.NameB,
 	}
 	return textResult(result), result, nil
 }
@@ -275,6 +376,14 @@ func (s *Server) handleSkillCreate(ctx context.Context, _ *sdkmcp.CallToolReques
 	}
 	_ = s.analyticsStore.Record("skill_create", in.Name, in.Description)
 	return textResult(fmt.Sprintf("skill %q created", in.Name)), map[string]any{"created": in.Name}, nil
+}
+
+func (s *Server) handleSkillUpdate(ctx context.Context, _ *sdkmcp.CallToolRequest, in SkillUpdateInput) (*sdkmcp.CallToolResult, any, error) {
+	if err := s.skillManager.Update(in.Name, in.Description, in.Content); err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	_ = s.analyticsStore.Record("skill_update", in.Name, "")
+	return textResult(fmt.Sprintf("skill %q updated", in.Name)), map[string]any{"updated": in.Name}, nil
 }
 
 func (s *Server) handleSkillActivate(ctx context.Context, _ *sdkmcp.CallToolRequest, in SkillNameInput) (*sdkmcp.CallToolResult, any, error) {
@@ -308,8 +417,9 @@ type ProfileNameInput struct {
 }
 
 type ProfileCompareInput struct {
-	NameA string `json:"name_a" jsonschema:"required, first profile name"`
-	NameB string `json:"name_b" jsonschema:"required, second profile name"`
+	NameA      string `json:"name_a" jsonschema:"required, first profile name"`
+	NameB      string `json:"name_b" jsonschema:"required, second profile name"`
+	SideBySide bool   `json:"side_by_side,omitempty" jsonschema:"if true, return full configs instead of unified diff"`
 }
 
 type ProfileCreateInput struct {
@@ -331,9 +441,27 @@ type ProfileUpdateSkillsInput struct {
 	Skills []string `json:"skills" jsonschema:"required, skill names"`
 }
 
+type ProfileUpdateModelInput struct {
+	Name  string `json:"name" jsonschema:"required, profile name"`
+	Model string `json:"model" jsonschema:"required, model id"`
+}
+
+type ProfileUpdateMCPInput struct {
+	Name       string   `json:"name" jsonschema:"required, profile name"`
+	MCPServers []string `json:"mcp_servers" jsonschema:"required, MCP server names"`
+}
+
+type ProfileUpdateDescInput struct {
+	Name        string `json:"name" jsonschema:"required, profile name"`
+	Description string `json:"description" jsonschema:"required, one-line description"`
+}
+
 func (s *Server) handleProfileList(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
-	profiles := s.profileManager.All()
-	return textResult(profiles), profiles, nil
+	payload := map[string]any{
+		"profiles": s.profileManager.All(),
+		"warnings": s.profileManager.Warnings(),
+	}
+	return textResult(payload), payload, nil
 }
 
 func (s *Server) handleProfileShow(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileNameInput) (*sdkmcp.CallToolResult, any, error) {
@@ -353,11 +481,38 @@ func (s *Server) handleProfileCompare(ctx context.Context, _ *sdkmcp.CallToolReq
 	if pB == nil {
 		return errorResult(fmt.Sprintf("profile %q not found", in.NameB)), nil, nil
 	}
+	if in.SideBySide {
+		result := map[string]any{"profile_a": pA, "profile_b": pB}
+		return textResult(result), result, nil
+	}
+	ya := formatProfileProjection(pA)
+	yb := formatProfileProjection(pB)
+	diff := textdiff.Unified(in.NameA+"/agent.yaml", in.NameB+"/agent.yaml", ya, yb)
 	result := map[string]any{
-		"profile_a": pA,
-		"profile_b": pB,
+		"identical": diff == "",
+		"diff":      diff,
+		"name_a":    in.NameA,
+		"name_b":    in.NameB,
 	}
 	return textResult(result), result, nil
+}
+
+func formatProfileProjection(p *profile.Profile) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "name: %s\n", p.Name)
+	if p.Description != "" {
+		fmt.Fprintf(&b, "description: %s\n", p.Description)
+	}
+	if p.Model != "" {
+		fmt.Fprintf(&b, "model: %s\n", p.Model)
+	}
+	fmt.Fprintf(&b, "skills: [%s]\n", strings.Join(p.Skills, ", "))
+	fmt.Fprintf(&b, "mcp_servers: [%s]\n", strings.Join(p.MCPServers, ", "))
+	fmt.Fprintf(&b, "system_prompt: |\n")
+	for _, line := range strings.Split(p.SystemPrompt, "\n") {
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	return b.String()
 }
 
 func (s *Server) handleProfileCreate(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileCreateInput) (*sdkmcp.CallToolResult, any, error) {
@@ -389,7 +544,47 @@ func (s *Server) handleProfileUpdateSkills(ctx context.Context, _ *sdkmcp.CallTo
 		return errorResult(err.Error()), nil, nil
 	}
 	_ = s.analyticsStore.Record("profile_update_skills", in.Name, strings.Join(in.Skills, ","))
-	return textResult(fmt.Sprintf("skills updated for profile %q", in.Name)), map[string]any{"updated": in.Name}, nil
+	return textResult(fmt.Sprintf("skills replaced for profile %q", in.Name)), map[string]any{"updated": in.Name}, nil
+}
+
+func (s *Server) handleProfileAddSkills(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileUpdateSkillsInput) (*sdkmcp.CallToolResult, any, error) {
+	if err := s.profileManager.AddSkills(in.Name, in.Skills); err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	_ = s.analyticsStore.Record("profile_add_skills", in.Name, strings.Join(in.Skills, ","))
+	return textResult(fmt.Sprintf("skills added to profile %q", in.Name)), map[string]any{"updated": in.Name, "skills": in.Skills}, nil
+}
+
+func (s *Server) handleProfileRemoveSkills(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileUpdateSkillsInput) (*sdkmcp.CallToolResult, any, error) {
+	if err := s.profileManager.RemoveSkills(in.Name, in.Skills); err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	_ = s.analyticsStore.Record("profile_remove_skills", in.Name, strings.Join(in.Skills, ","))
+	return textResult(fmt.Sprintf("skills removed from profile %q", in.Name)), map[string]any{"updated": in.Name, "skills": in.Skills}, nil
+}
+
+func (s *Server) handleProfileUpdateModel(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileUpdateModelInput) (*sdkmcp.CallToolResult, any, error) {
+	if err := s.profileManager.UpdateModel(in.Name, in.Model); err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	_ = s.analyticsStore.Record("profile_update_model", in.Name, in.Model)
+	return textResult(fmt.Sprintf("model updated for profile %q", in.Name)), map[string]any{"updated": in.Name, "model": in.Model}, nil
+}
+
+func (s *Server) handleProfileUpdateMCP(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileUpdateMCPInput) (*sdkmcp.CallToolResult, any, error) {
+	if err := s.profileManager.UpdateMCPServers(in.Name, in.MCPServers); err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	_ = s.analyticsStore.Record("profile_update_mcp", in.Name, strings.Join(in.MCPServers, ","))
+	return textResult(fmt.Sprintf("mcp_servers updated for profile %q", in.Name)), map[string]any{"updated": in.Name, "mcp_servers": in.MCPServers}, nil
+}
+
+func (s *Server) handleProfileUpdateDesc(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileUpdateDescInput) (*sdkmcp.CallToolResult, any, error) {
+	if err := s.profileManager.UpdateDescription(in.Name, in.Description); err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	_ = s.analyticsStore.Record("profile_update_desc", in.Name, "")
+	return textResult(fmt.Sprintf("description updated for profile %q", in.Name)), map[string]any{"updated": in.Name}, nil
 }
 
 func (s *Server) handleProfileDelete(ctx context.Context, _ *sdkmcp.CallToolRequest, in ProfileNameInput) (*sdkmcp.CallToolResult, any, error) {
@@ -416,23 +611,23 @@ func (s *Server) handleStackDeep(ctx context.Context, _ *sdkmcp.CallToolRequest,
 	if workspace == "" {
 		workspace = "."
 	}
-	status := integration.DeepCheck(ctx, workspace)
-	result := map[string]any{"status": status}
+	deep := integration.DeepCheck(ctx, workspace)
+	result := map[string]any{"status": deep}
 	if in.Stash {
 		outcome := "pass"
-		if !status.RetrievalReady {
+		if !deep.RetrievalReady {
 			outcome = "fail"
 		}
 		extra := []string{}
-		if status.RetrievalReady {
+		if deep.RetrievalReady {
 			extra = append(extra, "retrieval:ready")
 		} else {
 			extra = append(extra, "retrieval:not-ready")
-			for _, g := range status.RetrievalGaps {
+			for _, g := range deep.RetrievalGaps {
 				extra = append(extra, "gap:"+g)
 			}
 		}
-		res, err := evidence.SaveJSON(ctx, "stack-deep", "stack", outcome, extra, status)
+		res, err := evidence.SaveJSON(ctx, "stack-deep", "stack", outcome, extra, deep)
 		if err != nil {
 			result["stash_error"] = err.Error()
 		} else if res != nil {
@@ -442,6 +637,46 @@ func (s *Server) handleStackDeep(ctx context.Context, _ *sdkmcp.CallToolRequest,
 		}
 	}
 	return textResult(result), result, nil
+}
+
+type StatusInput struct {
+	Workspace       string `json:"workspace,omitempty" jsonschema:"workspace for deep/suggest probes"`
+	Deep            *bool  `json:"deep,omitempty" jsonschema:"include stack deep; default true"`
+	IncludeEvidence *bool  `json:"include_evidence,omitempty" jsonschema:"count open fails; default true"`
+	IncludeSuggest  *bool  `json:"include_suggest,omitempty" jsonschema:"include top next actions; default true"`
+	MaxNext         int    `json:"max_next,omitempty" jsonschema:"max next actions; default 5"`
+}
+
+func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in StatusInput) (*sdkmcp.CallToolResult, any, error) {
+	_ = s.skillManager.LoadAll()
+	_ = s.profileManager.LoadAll()
+	ws := in.Workspace
+	if ws == "" {
+		ws, _ = os.Getwd()
+		if ws == "" {
+			ws = "."
+		}
+	}
+	deep := true
+	if in.Deep != nil {
+		deep = *in.Deep
+	}
+	incEv := true
+	if in.IncludeEvidence != nil {
+		incEv = *in.IncludeEvidence
+	}
+	incSug := true
+	if in.IncludeSuggest != nil {
+		incSug = *in.IncludeSuggest
+	}
+	rep := status.Build(ctx, s.skillManager, s.profileManager, status.Options{
+		Workspace:       ws,
+		Deep:            deep,
+		IncludeEvidence: incEv,
+		IncludeSuggest:  incSug,
+		MaxNextActions:  in.MaxNext,
+	})
+	return textResult(rep), rep, nil
 }
 
 // --- Analytics handler ---
@@ -476,28 +711,164 @@ type TemplateNameInput struct {
 	Name string `json:"name" jsonschema:"required, template name"`
 }
 
+func (s *Server) templateDirs() []string {
+	return []string{templates.DefaultDir(s.agentsDir)}
+}
+
 func (s *Server) handleTemplateList(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
-	all := templates.All()
+	all, err := templates.Catalog(s.templateDirs()...)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
 	// Keep MCP payload light: omit full prompts in list.
 	type entry struct {
 		Name        string   `json:"name"`
 		Description string   `json:"description"`
 		Role        string   `json:"role"`
 		Skills      []string `json:"skills"`
+		Source      string   `json:"source,omitempty"`
 	}
 	out := make([]entry, 0, len(all))
 	for _, t := range all {
-		out = append(out, entry{Name: t.Name, Description: t.Description, Role: t.Role, Skills: t.Skills})
+		out = append(out, entry{Name: t.Name, Description: t.Description, Role: t.Role, Skills: t.Skills, Source: t.Source})
 	}
 	return textResult(out), out, nil
 }
 
 func (s *Server) handleTemplateShow(ctx context.Context, _ *sdkmcp.CallToolRequest, in TemplateNameInput) (*sdkmcp.CallToolResult, any, error) {
-	t := templates.Get(in.Name)
+	t := templates.GetFrom(in.Name, s.templateDirs()...)
 	if t == nil {
-		return errorResult(fmt.Sprintf("template %q not found; available: %s", in.Name, strings.Join(templates.Names(), ", "))), nil, nil
+		return errorResult(fmt.Sprintf("template %q not found; available: %s", in.Name, strings.Join(templates.NamesFrom(s.templateDirs()...), ", "))), nil, nil
 	}
 	return textResult(t), t, nil
+}
+
+type TemplateApplyInput struct {
+	Name    string `json:"name" jsonschema:"required, template name"`
+	Profile string `json:"profile,omitempty" jsonschema:"profile name; defaults to template name"`
+}
+
+func (s *Server) handleTemplateApply(ctx context.Context, _ *sdkmcp.CallToolRequest, in TemplateApplyInput) (*sdkmcp.CallToolResult, any, error) {
+	t := templates.GetFrom(in.Name, s.templateDirs()...)
+	if t == nil {
+		return errorResult(fmt.Sprintf("template %q not found; available: %s", in.Name, strings.Join(templates.NamesFrom(s.templateDirs()...), ", "))), nil, nil
+	}
+	name := strings.TrimSpace(in.Profile)
+	if name == "" {
+		name = t.Name
+	}
+	_ = s.profileManager.LoadAll()
+	existing := s.profileManager.Get(name)
+	created := false
+	if existing != nil {
+		if err := s.profileManager.UpdateSystemPrompt(name, t.Prompt); err != nil {
+			return errorResult(err.Error()), nil, nil
+		}
+		if err := s.profileManager.UpdateSkills(name, t.Skills); err != nil {
+			return errorResult(err.Error()), nil, nil
+		}
+	} else {
+		p := &profile.Profile{
+			Name:         name,
+			Description:  t.Description,
+			Skills:       t.Skills,
+			SystemPrompt: t.Prompt,
+		}
+		if err := s.profileManager.Create(p); err != nil {
+			return errorResult(err.Error()), nil, nil
+		}
+		created = true
+	}
+	_ = s.analyticsStore.Record("template_apply", t.Name, name)
+	result := map[string]any{"template": t.Name, "profile": name, "created": created}
+	return textResult(result), result, nil
+}
+
+// --- Library handlers ---
+
+type LibraryExportInput struct {
+	Dest             string `json:"dest" jsonschema:"required, destination directory or .tar.gz path"`
+	Note             string `json:"note,omitempty"`
+	IncludeTemplates *bool  `json:"include_templates,omitempty" jsonschema:"default true"`
+}
+
+type LibraryImportInput struct {
+	Source           string `json:"source" jsonschema:"required, bundle directory or .tar.gz"`
+	Force            bool   `json:"force,omitempty"`
+	IncludeTemplates *bool  `json:"include_templates,omitempty" jsonschema:"default true"`
+}
+
+func (s *Server) handleLibraryLint(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
+	rep, err := library.Lint(s.agentsDir)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	return textResult(rep), rep, nil
+}
+
+func (s *Server) handleLibraryExport(ctx context.Context, _ *sdkmcp.CallToolRequest, in LibraryExportInput) (*sdkmcp.CallToolResult, any, error) {
+	inc := true
+	if in.IncludeTemplates != nil {
+		inc = *in.IncludeTemplates
+	}
+	res, err := library.Export(library.ExportOptions{
+		AgentsDir: s.agentsDir, Dest: in.Dest, IncludeTemplates: inc, Note: in.Note,
+	})
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	return textResult(res), res, nil
+}
+
+func (s *Server) handleLibraryImport(ctx context.Context, _ *sdkmcp.CallToolRequest, in LibraryImportInput) (*sdkmcp.CallToolResult, any, error) {
+	inc := true
+	if in.IncludeTemplates != nil {
+		inc = *in.IncludeTemplates
+	}
+	res, err := library.Import(library.ImportOptions{
+		Source: in.Source, AgentsDir: s.agentsDir, Force: in.Force, IncludeTemplates: inc,
+	})
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	// Reload managers after import
+	_ = s.skillManager.LoadAll()
+	_ = s.profileManager.LoadAll()
+	return textResult(res), res, nil
+}
+
+// --- Bridge handlers ---
+
+type BridgeShowInput struct {
+	Profile string `json:"profile" jsonschema:"required, profile name"`
+	Format  string `json:"format,omitempty" jsonschema:"md|shell|yaml"`
+	Harness string `json:"harness,omitempty" jsonschema:"harness name; default local-agent"`
+}
+
+func (s *Server) handleBridgeShow(ctx context.Context, _ *sdkmcp.CallToolRequest, in BridgeShowInput) (*sdkmcp.CallToolResult, any, error) {
+	_ = s.profileManager.LoadAll()
+	p := s.profileManager.Get(in.Profile)
+	if p == nil {
+		return errorResult(fmt.Sprintf("profile %q not found", in.Profile)), nil, nil
+	}
+	fmtFormat := bridge.FormatMarkdown
+	switch strings.ToLower(in.Format) {
+	case "shell", "sh", "bash":
+		fmtFormat = bridge.FormatShell
+	case "yaml", "yml":
+		fmtFormat = bridge.FormatYAML
+	case "md", "markdown", "":
+		fmtFormat = bridge.FormatMarkdown
+	default:
+		return errorResult(fmt.Sprintf("unknown format %q", in.Format)), nil, nil
+	}
+	snip, err := bridge.Render(p, bridge.Options{
+		AgentsDir: s.agentsDir, ProfileName: p.Name, Harness: in.Harness, MinervaBinary: "minerva",
+	}, fmtFormat)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	return textResult(snip), snip, nil
 }
 
 // --- Evidence handlers ---
@@ -512,9 +883,27 @@ type EvidenceSaveInput struct {
 	Index   *bool    `json:"index,omitempty" jsonschema:"index for search after save; default true"`
 }
 
+type EvidenceSearchInput struct {
+	Query string `json:"query,omitempty" jsonschema:"search query; defaults to minerva"`
+}
+
+type EvidenceCloseInput struct {
+	StashID string `json:"stash_id" jsonschema:"required, fail stash id to close"`
+	Note    string `json:"note,omitempty" jsonschema:"optional resolution note"`
+	Kind    string `json:"kind,omitempty" jsonschema:"eval|suggest|stack|incident|other"`
+}
+
 func (s *Server) handleEvidenceDocs(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
 	docs := evidence.Docs()
 	return textResult(docs), map[string]any{"docs": docs}, nil
+}
+
+func (s *Server) handleEvidenceSearch(ctx context.Context, _ *sdkmcp.CallToolRequest, in EvidenceSearchInput) (*sdkmcp.CallToolResult, any, error) {
+	out, err := evidence.SearchMinerva(ctx, in.Query)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	return textResult(out), map[string]any{"raw": out}, nil
 }
 
 func (s *Server) handleEvidenceSave(ctx context.Context, _ *sdkmcp.CallToolRequest, in EvidenceSaveInput) (*sdkmcp.CallToolResult, any, error) {
@@ -539,6 +928,19 @@ func (s *Server) handleEvidenceSave(ctx context.Context, _ *sdkmcp.CallToolReque
 		return errorResult(err.Error()), nil, nil
 	}
 	_ = s.analyticsStore.Record("evidence_save", res.ID, kind)
+	return textResult(res), res, nil
+}
+
+func (s *Server) handleEvidenceClose(ctx context.Context, _ *sdkmcp.CallToolRequest, in EvidenceCloseInput) (*sdkmcp.CallToolResult, any, error) {
+	res, err := evidence.Close(ctx, evidence.CloseRequest{
+		StashID: in.StashID,
+		Note:    in.Note,
+		Kind:    in.Kind,
+	})
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	_ = s.analyticsStore.Record("evidence_close", res.ClosedID, res.ReceiptID)
 	return textResult(res), res, nil
 }
 

@@ -1,21 +1,34 @@
-// Package templates provides pre-built system prompt templates for common
-// agent roles. These are starting points that users can customize.
+// Package templates provides role prompt templates: built-in seeds plus
+// optional on-disk templates under ~/.agents/templates/<name>/template.yaml.
+// Disk templates override builtins with the same name.
 package templates
 
-import "sort"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
 
 // Template is a pre-built system prompt for a specific agent role.
 type Template struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Role        string   `json:"role"`
-	Skills      []string `json:"skills"`
-	Prompt      string   `json:"prompt"`
+	Name        string   `json:"name" yaml:"name"`
+	Description string   `json:"description" yaml:"description"`
+	Role        string   `json:"role" yaml:"role"`
+	Skills      []string `json:"skills" yaml:"skills"`
+	Prompt      string   `json:"prompt" yaml:"prompt"`
+	// Source is "builtin" or "disk".
+	Source string `json:"source,omitempty" yaml:"-"`
+	// Path is set for disk-backed templates.
+	Path string `json:"path,omitempty" yaml:"-"`
 }
 
-// All returns all available templates.
-func All() []Template {
-	templates := []Template{
+// Builtins returns the embedded role templates (source=builtin).
+func Builtins() []Template {
+	out := []Template{
 		{
 			Name:        "code-reviewer",
 			Description: "Thorough code reviewer focused on correctness, security, and maintainability",
@@ -137,30 +150,215 @@ func All() []Template {
 - ADRs: context, decision, consequences, alternatives considered`,
 		},
 	}
-
-	sort.Slice(templates, func(i, j int) bool {
-		return templates[i].Name < templates[j].Name
-	})
-
-	return templates
+	for i := range out {
+		out[i].Source = "builtin"
+	}
+	return out
 }
 
-// Get returns a template by name.
+// LoadDir loads templates from <dir>/<name>/template.yaml (or template.yml / agent-style).
+func LoadDir(dir string) ([]Template, error) {
+	if strings.TrimSpace(dir) == "" {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read templates dir: %w", err)
+	}
+	var out []Template
+	for _, e := range entries {
+		if !e.IsDir() {
+			// Also allow flat template.yaml files named <name>.yaml
+			name := e.Name()
+			if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+				path := filepath.Join(dir, name)
+				t, err := loadFile(path)
+				if err != nil {
+					return nil, err
+				}
+				if t.Name == "" {
+					t.Name = strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
+				}
+				t.Source = "disk"
+				t.Path = path
+				out = append(out, *t)
+			}
+			continue
+		}
+		for _, fname := range []string{"template.yaml", "template.yml"} {
+			path := filepath.Join(dir, e.Name(), fname)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, fmt.Errorf("read %s: %w", path, err)
+			}
+			t, err := parseYAML(data)
+			if err != nil {
+				return nil, fmt.Errorf("parse %s: %w", path, err)
+			}
+			if t.Name == "" {
+				t.Name = e.Name()
+			}
+			t.Source = "disk"
+			t.Path = path
+			out = append(out, *t)
+			break
+		}
+	}
+	return out, nil
+}
+
+func loadFile(path string) (*Template, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseYAML(data)
+}
+
+func parseYAML(data []byte) (*Template, error) {
+	var t Template
+	if err := yaml.Unmarshal(data, &t); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(t.Name) == "" && strings.TrimSpace(t.Prompt) == "" {
+		return nil, fmt.Errorf("template missing name and prompt")
+	}
+	return &t, nil
+}
+
+// Catalog merges builtins with disk templates. Disk wins on name collision.
+// dirs are searched in order; later dirs override earlier ones.
+func Catalog(dirs ...string) ([]Template, error) {
+	byName := map[string]Template{}
+	for _, t := range Builtins() {
+		byName[t.Name] = t
+	}
+	for _, dir := range dirs {
+		loaded, err := LoadDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range loaded {
+			byName[t.Name] = t
+		}
+	}
+	out := make([]Template, 0, len(byName))
+	for _, t := range byName {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// All is Catalog with no disk dirs (builtins only). Prefer Catalog for full resolution.
+func All() []Template {
+	out, _ := Catalog()
+	return out
+}
+
+// Get returns a template by name from builtins only.
+// Prefer GetFrom for disk-aware lookup.
 func Get(name string) *Template {
-	for _, t := range All() {
-		if t.Name == name {
+	return GetFrom(name)
+}
+
+// GetFrom looks up a template by name (disk dirs optional).
+func GetFrom(name string, dirs ...string) *Template {
+	all, err := Catalog(dirs...)
+	if err != nil {
+		return nil
+	}
+	for i := range all {
+		if all[i].Name == name {
+			t := all[i]
 			return &t
 		}
 	}
 	return nil
 }
 
-// Names returns all template names.
+// Names returns all template names from builtins only.
 func Names() []string {
-	templates := All()
-	names := make([]string, len(templates))
-	for i, t := range templates {
+	all := All()
+	names := make([]string, len(all))
+	for i, t := range all {
 		names[i] = t.Name
 	}
 	return names
+}
+
+// NamesFrom returns names including disk templates.
+func NamesFrom(dirs ...string) []string {
+	all, err := Catalog(dirs...)
+	if err != nil {
+		return Names()
+	}
+	names := make([]string, len(all))
+	for i, t := range all {
+		names[i] = t.Name
+	}
+	return names
+}
+
+// Save writes a template to dir/<name>/template.yaml.
+func Save(dir string, t Template) error {
+	if strings.TrimSpace(t.Name) == "" {
+		return fmt.Errorf("template name is required")
+	}
+	if strings.TrimSpace(t.Prompt) == "" {
+		return fmt.Errorf("template prompt is required")
+	}
+	pathDir := filepath.Join(dir, t.Name)
+	if err := os.MkdirAll(pathDir, 0o755); err != nil {
+		return err
+	}
+	// Persist only file fields.
+	payload := struct {
+		Name        string   `yaml:"name"`
+		Description string   `yaml:"description,omitempty"`
+		Role        string   `yaml:"role,omitempty"`
+		Skills      []string `yaml:"skills,omitempty"`
+		Prompt      string   `yaml:"prompt"`
+	}{
+		Name: t.Name, Description: t.Description, Role: t.Role,
+		Skills: t.Skills, Prompt: t.Prompt,
+	}
+	data, err := yaml.Marshal(&payload)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(pathDir, "template.yaml")
+	return os.WriteFile(path, data, 0o644)
+}
+
+// InstallBuiltin copies a builtin template to disk (overwrites).
+func InstallBuiltin(dir, name string) (*Template, error) {
+	var found *Template
+	for _, t := range Builtins() {
+		if t.Name == name {
+			copy := t
+			found = &copy
+			break
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("builtin template %q not found", name)
+	}
+	if err := Save(dir, *found); err != nil {
+		return nil, err
+	}
+	found.Source = "disk"
+	found.Path = filepath.Join(dir, name, "template.yaml")
+	return found, nil
+}
+
+// DefaultDir returns <agentsDir>/templates.
+func DefaultDir(agentsDir string) string {
+	return filepath.Join(agentsDir, "templates")
 }

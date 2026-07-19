@@ -1,0 +1,66 @@
+version: 1
+name: minerva_status_and_bridge
+intent: |
+    operators get a unified status report and can generate a local-agent bridge
+    snippet for a profile in an isolated agents root.
+target:
+    cmd: ["./bin/minerva", "status", "--deep=false", "--no-evidence"]
+    cwd: "."
+    env:
+        MINERVA_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/status-agents"
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: |
+            set -e
+            go build -o ./bin/minerva ./cmd/minerva
+            ROOT="$PWD/.glyphrun/tmp/status-agents"
+            rm -rf "$ROOT"
+            export MINERVA_AGENTS_DIR="$ROOT"
+            ./bin/minerva init
+            ./bin/minerva skill create alpha "body" -d "alpha"
+            ./bin/minerva profile create dev "you are dev" -s alpha
+          cwd: "."
+          timeoutMs: 90000
+steps:
+    - wait:
+        screen:
+            contains: "Minerva status"
+        timeoutMs: 30000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: status_has_verdict
+      description: status output includes a verdict line
+      verify:
+        screen:
+            contains: "Minerva status"
+    - id: status_json_has_verdict_field
+      description: status --json includes verdict
+      verify:
+        command:
+            run: |
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/status-agents" ./bin/minerva status --deep=false --no-evidence --json | grep -q '"verdict"'
+    - id: bridge_shell_header
+      description: bridge show emits a bash script header for the profile
+      verify:
+        command:
+            run: |
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/status-agents" ./bin/minerva bridge show dev -f shell | grep -q '#!/usr/bin/env bash'
+    - id: template_list_shows_source
+      description: template list marks builtin sources
+      verify:
+        command:
+            run: |
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/status-agents" ./bin/minerva template list | grep -q '\[builtin\]'
+    - id: exits_zero
+      description: status exits successfully when core stack is present
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:8fb94f61158e74a8cffb0894c88a03b6836dad283eb51282de1ec5f2345bc8a9

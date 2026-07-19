@@ -10,18 +10,23 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/abdul-hamid-achik/minerva/internal/analytics"
+	"github.com/abdul-hamid-achik/minerva/internal/bridge"
 	"github.com/abdul-hamid-achik/minerva/internal/evidence"
 	"github.com/abdul-hamid-achik/minerva/internal/integration"
+	"github.com/abdul-hamid-achik/minerva/internal/library"
 	minervamcp "github.com/abdul-hamid-achik/minerva/internal/mcp"
 	"github.com/abdul-hamid-achik/minerva/internal/monitor"
 	"github.com/abdul-hamid-achik/minerva/internal/profile"
 	"github.com/abdul-hamid-achik/minerva/internal/skill"
+	"github.com/abdul-hamid-achik/minerva/internal/status"
 	"github.com/abdul-hamid-achik/minerva/internal/suggest"
 	"github.com/abdul-hamid-achik/minerva/internal/templates"
+	"github.com/abdul-hamid-achik/minerva/internal/textdiff"
 	"github.com/abdul-hamid-achik/minerva/internal/version"
 )
 
@@ -48,9 +53,12 @@ disk into its own session — it does not read .minerva-skills.json.`,
 		newSkillCmd(),
 		newProfileCmd(),
 		newStackCmd(),
+		newStatusCmd(),
 		newAnalyticsCmd(),
 		newSuggestCmd(),
 		newTemplateCmd(),
+		newLibraryCmd(),
+		newBridgeCmd(),
 		newEvidenceCmd(),
 		newMCPCmd(),
 		newInitCmd(),
@@ -70,6 +78,7 @@ func newSkillCmd() *cobra.Command {
 		newSkillShowCmd(),
 		newSkillCompareCmd(),
 		newSkillCreateCmd(),
+		newSkillUpdateCmd(),
 		newSkillActivateCmd(),
 		newSkillDeactivateCmd(),
 		newSkillDeleteCmd(),
@@ -130,9 +139,10 @@ func newSkillShowCmd() *cobra.Command {
 }
 
 func newSkillCompareCmd() *cobra.Command {
+	var sideBySide bool
 	cmd := &cobra.Command{
 		Use:   "compare <name-a> <name-b>",
-		Short: "Compare two skills side by side",
+		Short: "Compare two skills (unified diff by default)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr := skillManager()
@@ -147,26 +157,44 @@ func newSkillCompareCmd() *cobra.Command {
 			if !okB {
 				return fmt.Errorf("skill %q not found", args[1])
 			}
-			fmt.Printf("=== %s ===\n%s\n\n=== %s ===\n%s\n", args[0], contentA, args[1], contentB)
+			if sideBySide {
+				fmt.Printf("=== %s ===\n%s\n\n=== %s ===\n%s\n", args[0], contentA, args[1], contentB)
+				return nil
+			}
+			diff := textdiff.Unified(args[0], args[1], contentA, contentB)
+			if diff == "" {
+				fmt.Println("skills are identical")
+				return nil
+			}
+			fmt.Print(diff)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&sideBySide, "side-by-side", false, "print full bodies instead of unified diff")
 	return cmd
 }
 
 func newSkillCreateCmd() *cobra.Command {
-	var description string
+	var description, fromFile string
 	cmd := &cobra.Command{
-		Use:   "create <name> <content>",
+		Use:   "create <name> [content]",
 		Short: "Create a new skill",
-		Args:  cobra.ExactArgs(2),
+		Long:  `Create a skill under ~/.agents/skills/<name>/SKILL.md. Pass body as the second argument or via --from-file.`,
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr := skillManager()
 			if err := mgr.LoadAll(); err != nil {
 				return err
 			}
+			content, err := resolveContentArg(args, 1, fromFile)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(content) == "" {
+				return fmt.Errorf("content is required (positional argument or --from-file)")
+			}
 			skillsDir := filepath.Join(agentsDir(), "skills")
-			if err := mgr.Create(skillsDir, args[0], description, args[1]); err != nil {
+			if err := mgr.Create(skillsDir, args[0], description, content); err != nil {
 				return err
 			}
 			_ = analyticsStore().Record("skill_create", args[0], description)
@@ -175,14 +203,69 @@ func newSkillCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&description, "description", "d", "", "one-line description")
+	cmd.Flags().StringVar(&fromFile, "from-file", "", "read skill body from file")
+	return cmd
+}
+
+func newSkillUpdateCmd() *cobra.Command {
+	var description, fromFile, contentFlag string
+	var setDescription bool
+	cmd := &cobra.Command{
+		Use:   "update <name>",
+		Short: "Update an existing skill's description and/or body",
+		Long:  `Update skill frontmatter description and/or markdown body. Use --description, --content, and/or --from-file.`,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := skillManager()
+			if err := mgr.LoadAll(); err != nil {
+				return err
+			}
+			var descPtr *string
+			var contentPtr *string
+			if setDescription {
+				descPtr = &description
+			}
+			if fromFile != "" {
+				data, err := os.ReadFile(fromFile)
+				if err != nil {
+					return fmt.Errorf("read --from-file: %w", err)
+				}
+				s := string(data)
+				contentPtr = &s
+			} else if cmd.Flags().Changed("content") {
+				contentPtr = &contentFlag
+			}
+			if descPtr == nil && contentPtr == nil {
+				return fmt.Errorf("nothing to update: pass --description and/or --content/--from-file")
+			}
+			if err := mgr.Update(args[0], descPtr, contentPtr); err != nil {
+				return err
+			}
+			_ = analyticsStore().Record("skill_update", args[0], "")
+			fmt.Printf("skill %q updated\n", args[0])
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&description, "description", "d", "", "new one-line description")
+	cmd.Flags().StringVar(&contentFlag, "content", "", "new markdown body")
+	cmd.Flags().StringVar(&fromFile, "from-file", "", "read new body from file")
+	cmd.PreRun = func(cmd *cobra.Command, _ []string) {
+		if cmd.Flags().Changed("description") {
+			setDescription = true
+		}
+	}
 	return cmd
 }
 
 func newSkillActivateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "activate <name>",
-		Short: "Activate a skill",
-		Args:  cobra.ExactArgs(1),
+		Short: "Mark a skill active in Minerva-local catalog state",
+		Long: `Updates ~/.agents/.minerva-skills.json only.
+
+local-agent does not read this file. For durable harness behavior, add the
+skill to a profile: minerva profile add-skills <profile> <skill>`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr := skillManager()
 			if err := mgr.LoadAll(); err != nil {
@@ -192,7 +275,7 @@ func newSkillActivateCmd() *cobra.Command {
 				return err
 			}
 			_ = analyticsStore().Record("skill_activate", args[0], "")
-			fmt.Printf("skill %q activated\n", args[0])
+			fmt.Printf("skill %q activated (Minerva-local only; use profile add-skills for local-agent)\n", args[0])
 			return nil
 		},
 	}
@@ -255,6 +338,11 @@ func newProfileCmd() *cobra.Command {
 		newProfileCreateCmd(),
 		newProfileUpdatePromptCmd(),
 		newProfileUpdateSkillsCmd(),
+		newProfileAddSkillsCmd(),
+		newProfileRemoveSkillsCmd(),
+		newProfileUpdateModelCmd(),
+		newProfileUpdateMCPCmd(),
+		newProfileUpdateDescCmd(),
 		newProfileDeleteCmd(),
 	)
 	return cmd
@@ -271,7 +359,14 @@ func newProfileListCmd() *cobra.Command {
 				return err
 			}
 			if jsonOut {
-				return printJSON(mgr.All())
+				payload := map[string]any{
+					"profiles": mgr.All(),
+					"warnings": mgr.Warnings(),
+				}
+				return printJSON(payload)
+			}
+			for _, w := range mgr.Warnings() {
+				fmt.Fprintf(os.Stderr, "warning: profile %q — %s\n", w.Dir, w.Message)
 			}
 			for _, p := range mgr.All() {
 				fmt.Printf("%s", p.Name)
@@ -323,9 +418,10 @@ func newProfileShowCmd() *cobra.Command {
 }
 
 func newProfileCompareCmd() *cobra.Command {
+	var sideBySide bool
 	cmd := &cobra.Command{
 		Use:   "compare <name-a> <name-b>",
-		Short: "Compare two profiles side by side",
+		Short: "Compare two profiles (unified YAML diff by default)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr := profileManager()
@@ -340,19 +436,37 @@ func newProfileCompareCmd() *cobra.Command {
 			if pB == nil {
 				return fmt.Errorf("profile %q not found", args[1])
 			}
-			fmt.Printf("=== %s ===\n", args[0])
-			fmt.Printf("  Model:       %s\n", pA.Model)
-			fmt.Printf("  Skills:      %s\n", strings.Join(pA.Skills, ", "))
-			fmt.Printf("  MCP Servers: %s\n", strings.Join(pA.MCPServers, ", "))
-			fmt.Printf("  Prompt:      %s\n", truncate(pA.SystemPrompt, 80))
-			fmt.Printf("\n=== %s ===\n", args[1])
-			fmt.Printf("  Model:       %s\n", pB.Model)
-			fmt.Printf("  Skills:      %s\n", strings.Join(pB.Skills, ", "))
-			fmt.Printf("  MCP Servers: %s\n", strings.Join(pB.MCPServers, ", "))
-			fmt.Printf("  Prompt:      %s\n", truncate(pB.SystemPrompt, 80))
+			if sideBySide {
+				fmt.Printf("=== %s ===\n", args[0])
+				fmt.Printf("  Model:       %s\n", pA.Model)
+				fmt.Printf("  Skills:      %s\n", strings.Join(pA.Skills, ", "))
+				fmt.Printf("  MCP Servers: %s\n", strings.Join(pA.MCPServers, ", "))
+				fmt.Printf("  Prompt:      %s\n", truncate(pA.SystemPrompt, 80))
+				fmt.Printf("\n=== %s ===\n", args[1])
+				fmt.Printf("  Model:       %s\n", pB.Model)
+				fmt.Printf("  Skills:      %s\n", strings.Join(pB.Skills, ", "))
+				fmt.Printf("  MCP Servers: %s\n", strings.Join(pB.MCPServers, ", "))
+				fmt.Printf("  Prompt:      %s\n", truncate(pB.SystemPrompt, 80))
+				return nil
+			}
+			ya, err := profileYAML(pA)
+			if err != nil {
+				return err
+			}
+			yb, err := profileYAML(pB)
+			if err != nil {
+				return err
+			}
+			diff := textdiff.Unified(args[0]+"/agent.yaml", args[1]+"/agent.yaml", ya, yb)
+			if diff == "" {
+				fmt.Println("profiles are identical")
+				return nil
+			}
+			fmt.Print(diff)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&sideBySide, "side-by-side", false, "print summary fields instead of unified diff")
 	return cmd
 }
 
@@ -419,22 +533,127 @@ func newProfileUpdatePromptCmd() *cobra.Command {
 func newProfileUpdateSkillsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update-skills <name> <skill1,skill2,...>",
-		Short: "Update a profile's skills",
+		Short: "Replace a profile's skills list",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr := profileManager()
 			if err := mgr.LoadAll(); err != nil {
 				return err
 			}
-			skills := strings.Split(args[1], ",")
-			for i, s := range skills {
-				skills[i] = strings.TrimSpace(s)
-			}
+			skills := splitCSV(args[1])
 			if err := mgr.UpdateSkills(args[0], skills); err != nil {
 				return err
 			}
 			_ = analyticsStore().Record("profile_update_skills", args[0], strings.Join(skills, ","))
-			fmt.Printf("skills updated for profile %q\n", args[0])
+			fmt.Printf("skills replaced for profile %q\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newProfileAddSkillsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "add-skills <name> <skill1,skill2,...>",
+		Short: "Merge skills into a profile without dropping existing ones",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := profileManager()
+			if err := mgr.LoadAll(); err != nil {
+				return err
+			}
+			skills := splitCSV(args[1])
+			if err := mgr.AddSkills(args[0], skills); err != nil {
+				return err
+			}
+			_ = analyticsStore().Record("profile_add_skills", args[0], strings.Join(skills, ","))
+			fmt.Printf("skills added to profile %q\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newProfileRemoveSkillsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "remove-skills <name> <skill1,skill2,...>",
+		Short: "Remove skills from a profile",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := profileManager()
+			if err := mgr.LoadAll(); err != nil {
+				return err
+			}
+			skills := splitCSV(args[1])
+			if err := mgr.RemoveSkills(args[0], skills); err != nil {
+				return err
+			}
+			_ = analyticsStore().Record("profile_remove_skills", args[0], strings.Join(skills, ","))
+			fmt.Printf("skills removed from profile %q\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newProfileUpdateModelCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update-model <name> <model>",
+		Short: "Update a profile's model",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := profileManager()
+			if err := mgr.LoadAll(); err != nil {
+				return err
+			}
+			if err := mgr.UpdateModel(args[0], args[1]); err != nil {
+				return err
+			}
+			_ = analyticsStore().Record("profile_update_model", args[0], args[1])
+			fmt.Printf("model updated for profile %q\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newProfileUpdateMCPCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update-mcp <name> <server1,server2,...>",
+		Short: "Replace a profile's MCP server allowlist",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := profileManager()
+			if err := mgr.LoadAll(); err != nil {
+				return err
+			}
+			servers := splitCSV(args[1])
+			if err := mgr.UpdateMCPServers(args[0], servers); err != nil {
+				return err
+			}
+			_ = analyticsStore().Record("profile_update_mcp", args[0], strings.Join(servers, ","))
+			fmt.Printf("mcp_servers updated for profile %q\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newProfileUpdateDescCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update-desc <name> <description>",
+		Short: "Update a profile's description",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := profileManager()
+			if err := mgr.LoadAll(); err != nil {
+				return err
+			}
+			if err := mgr.UpdateDescription(args[0], args[1]); err != nil {
+				return err
+			}
+			_ = analyticsStore().Record("profile_update_desc", args[0], "")
+			fmt.Printf("description updated for profile %q\n", args[0])
 			return nil
 		},
 	}
@@ -461,6 +680,124 @@ func newProfileDeleteCmd() *cobra.Command {
 	return cmd
 }
 
+// --- Status / doctor ---
+
+func newStatusCmd() *cobra.Command {
+	var workspace string
+	var jsonOut, deep, noEvidence, noSuggest, watch bool
+	var maxNext int
+	var interval time.Duration
+	cmd := &cobra.Command{
+		Use:     "status",
+		Aliases: []string{"doctor"},
+		Short:   "Unified library + stack + evidence status",
+		Long: `One operator view: library inventory, stack presence, optional deep readiness,
+open evidence fails, and top next actions.
+
+Exit codes (after printing; not used with --watch):
+  0  healthy
+  1  unhealthy (core incomplete)
+  2  degraded (optional missing, retrieval, library warnings, open fails)
+With --require-retrieval, also exits 3 when retrieval is not ready (implies --deep).
+
+--watch re-probes on an interval until interrupted (Ctrl-C).`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ws := workspace
+			if ws == "" {
+				ws, _ = os.Getwd()
+			}
+			requireRetrieval, _ := cmd.Flags().GetBool("require-retrieval")
+			if requireRetrieval {
+				deep = true
+			}
+
+			runOnce := func() (status.Report, error) {
+				sm := skillManager()
+				if err := sm.LoadAll(); err != nil {
+					return status.Report{}, err
+				}
+				pm := profileManager()
+				if err := pm.LoadAll(); err != nil {
+					return status.Report{}, err
+				}
+				return status.Build(cmd.Context(), sm, pm, status.Options{
+					Workspace:       ws,
+					Deep:            deep,
+					IncludeEvidence: !noEvidence,
+					IncludeSuggest:  !noSuggest,
+					MaxNextActions:  maxNext,
+				}), nil
+			}
+
+			printRep := func(rep status.Report) error {
+				if jsonOut {
+					return printJSON(rep)
+				}
+				fmt.Print(status.FormatHuman(rep))
+				return nil
+			}
+
+			if watch {
+				if interval <= 0 {
+					interval = 60 * time.Second
+				}
+				ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+				defer cancel()
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for {
+					rep, err := runOnce()
+					if err != nil {
+						return err
+					}
+					if !jsonOut {
+						fmt.Fprintf(os.Stderr, "\n--- %s (next in %s; Ctrl-C to stop) ---\n",
+							time.Now().Format(time.RFC3339), interval)
+					}
+					if err := printRep(rep); err != nil {
+						return err
+					}
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-ticker.C:
+					}
+				}
+			}
+
+			rep, err := runOnce()
+			if err != nil {
+				return err
+			}
+			if err := printRep(rep); err != nil {
+				return err
+			}
+
+			if requireRetrieval && rep.Deep != nil && !rep.Deep.RetrievalReady {
+				return ExitCode(3)
+			}
+			switch rep.Verdict {
+			case "unhealthy":
+				return ExitCode(1)
+			case "degraded":
+				return ExitCode(2)
+			default:
+				return nil
+			}
+		},
+	}
+	cmd.Flags().StringVarP(&workspace, "workspace", "C", "", "workspace for deep/suggest probes")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
+	cmd.Flags().BoolVar(&deep, "deep", true, "include stack deep readiness probes")
+	cmd.Flags().BoolVar(&noEvidence, "no-evidence", false, "skip fcheap open-fail counts")
+	cmd.Flags().BoolVar(&noSuggest, "no-suggest", false, "skip top next-action suggestions")
+	cmd.Flags().IntVar(&maxNext, "max-next", 5, "max next actions to include")
+	cmd.Flags().Bool("require-retrieval", false, "exit 3 when retrieval not ready (implies --deep)")
+	cmd.Flags().BoolVar(&watch, "watch", false, "re-run status until interrupted")
+	cmd.Flags().DurationVar(&interval, "interval", 60*time.Second, "watch interval (e.g. 30s, 2m)")
+	return cmd
+}
+
 // --- Stack commands ---
 
 func newStackCmd() *cobra.Command {
@@ -476,49 +813,58 @@ func newStackCmd() *cobra.Command {
 }
 
 func newStackCheckCmd() *cobra.Command {
-	var jsonOut bool
+	var jsonOut, strict bool
 	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Check intelligence stack presence (tiered; correct binaries)",
-		Long:  `Probes PATH for stack tools using real binary names (glyph, cairn, tvault). Core tools missing → unhealthy; optional missing → degraded. Domain readiness is under stack deep.`,
+		Long: `Probes PATH for stack tools using real binary names (glyph, cairn, tvault).
+Core tools missing → unhealthy (exit 1); optional missing → degraded.
+With --strict, degraded also exits 2. Domain readiness is under stack deep.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			status := monitor.CheckStack()
 			if jsonOut {
-				data, err := monitor.CheckStackJSON()
+				data, err := json.MarshalIndent(status, "", "  ")
 				if err != nil {
 					return err
 				}
 				fmt.Println(string(data))
-				return nil
-			}
-			status := monitor.CheckStack()
-			for _, tool := range status.Tools {
-				icon := "✓"
-				if !tool.Found {
-					icon = "✗"
-				}
-				fmt.Printf(" %s %-12s %-10s bin=%-10s", icon, tool.Name, tool.Tier, tool.Command)
-				if tool.Found {
-					if tool.Version != "" {
-						fmt.Printf(" %s", tool.Version)
-					} else if tool.Error != "" {
-						fmt.Printf(" (present; %s)", tool.Error)
+			} else {
+				for _, tool := range status.Tools {
+					icon := "✓"
+					if !tool.Found {
+						icon = "✗"
 					}
-				} else {
-					fmt.Printf(" %s", tool.Error)
+					fmt.Printf(" %s %-12s %-10s bin=%-10s", icon, tool.Name, tool.Tier, tool.Command)
+					if tool.Found {
+						if tool.Version != "" {
+							fmt.Printf(" %s", tool.Version)
+						} else if tool.Error != "" {
+							fmt.Printf(" (present; %s)", tool.Error)
+						}
+					} else {
+						fmt.Printf(" %s", tool.Error)
+					}
+					fmt.Println()
 				}
-				fmt.Println()
+				fmt.Printf("\n%s\n", status.Summary)
 			}
-			fmt.Printf("\n%s\n", status.Summary)
+			if !status.CoreHealthy {
+				return ExitCode(1)
+			}
+			if strict && status.Degraded {
+				return ExitCode(2)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
+	cmd.Flags().BoolVar(&strict, "strict", false, "exit 2 when optional/infra tools are missing")
 	return cmd
 }
 
 func newStackDeepCmd() *cobra.Command {
 	var workspace string
-	var jsonOut, stash bool
+	var jsonOut, stash, requireRetrieval, requireCore bool
 	cmd := &cobra.Command{
 		Use:   "deep [workspace]",
 		Short: "Deep stack probe (bob/cortex/mcphub + readiness doctors)",
@@ -526,7 +872,12 @@ func newStackDeepCmd() *cobra.Command {
 plus optional codemap/vecgrep/fcheap/tvault/monitor readiness probes.
 
 Sets retrieval_ready only when both codemap and vecgrep are domain-ready.
---stash writes the JSON report to fcheap with minerva-stack tags (TTL 30d).`,
+--stash writes the JSON report to fcheap with minerva-stack tags (TTL 30d).
+
+Exit codes (after printing the report):
+  0  ok
+  1  --require-core and core presence incomplete
+  3  --require-retrieval and retrieval_ready is false`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ws := workspace
 			if ws == "" && len(args) > 0 {
@@ -561,8 +912,10 @@ Sets retrieval_ready only when both codemap and vecgrep are domain-ready.
 			}
 
 			if jsonOut {
-				return printJSON(status)
-			}
+				if err := printJSON(status); err != nil {
+					return err
+				}
+			} else {
 			fmt.Printf("=== Intelligence Stack Deep Probe ===\n\n")
 			if status.Bob.Error != "" {
 				fmt.Printf("bob:     %s\n", status.Bob.Error)
@@ -656,12 +1009,25 @@ Sets retrieval_ready only when both codemap and vecgrep are domain-ready.
 				fmt.Printf("\nmcphub high-error servers: %s\n", strings.Join(status.MCPHub.HighErrorServers, ", "))
 			}
 			fmt.Printf("\n%s\n", status.Summary)
+			} // end !jsonOut
+
+			if requireCore {
+				presence := monitor.CheckStack()
+				if !presence.CoreHealthy {
+					return ExitCode(1)
+				}
+			}
+			if requireRetrieval && !status.RetrievalReady {
+				return ExitCode(3)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&workspace, "workspace", "C", "", "workspace directory")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
 	cmd.Flags().BoolVar(&stash, "stash", false, "save report to fcheap (minerva-stack tags, TTL 30d)")
+	cmd.Flags().BoolVar(&requireRetrieval, "require-retrieval", false, "exit 3 when retrieval_ready is false")
+	cmd.Flags().BoolVar(&requireCore, "require-core", false, "exit 1 when core stack presence is incomplete")
 	return cmd
 }
 
@@ -671,13 +1037,20 @@ func newAnalyticsCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "analytics",
-		Short: "View usage analytics",
+		Short: "View Minerva-local usage analytics",
+		Long: `Shows events recorded by Minerva itself (skill activate/create, profile updates, …).
+
+This is NOT harness telemetry: local-agent session skill loads and mcphub tool_calls
+are owned by those tools. Prefer minerva status / stack deep / evidence for readiness.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store := analyticsStore()
 			_ = store.Load()
 			summary := store.Summarize()
 			if jsonOut {
 				return printJSON(summary)
+			}
+			if summary.Note != "" {
+				fmt.Printf("Note: %s\n", summary.Note)
 			}
 			fmt.Printf("Total events: %d\n", summary.TotalEvents)
 			fmt.Printf("Suggestions applied: %d\n", summary.SuggestionsApplied)
@@ -700,17 +1073,17 @@ func newAnalyticsCmd() *cobra.Command {
 // --- Suggest command ---
 
 func newSuggestCmd() *cobra.Command {
-	var jsonOut, apply bool
+	var jsonOut, apply, applyLocal bool
 	cmd := &cobra.Command{
 		Use:   "suggest",
 		Short: "Get library and stack improvement suggestions",
 		Long: `Analyze skills, profiles, stack presence, analytics, and workspace type.
 
-Activation suggestions update Minerva's local state only
-(~/.agents/.minerva-skills.json). They do not inject skills into a live
-local-agent session. Prefer profile skill lists for durable harness behavior.
+Durable suggestions prefer profile skill membership (shared with local-agent).
+Minerva-local activation (~/.agents/.minerva-skills.json) is secondary.
 
---apply only runs allowlisted "minerva skill activate <name>" actions.`,
+--apply runs allowlisted "minerva profile add-skills …" actions only.
+--apply-local also allows "minerva skill activate <name>" (catalog pin only).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			mgr := skillManager()
 			if err := mgr.LoadAll(); err != nil {
@@ -719,6 +1092,9 @@ local-agent session. Prefer profile skill lists for durable harness behavior.
 			pmgr := profileManager()
 			if err := pmgr.LoadAll(); err != nil {
 				return err
+			}
+			for _, w := range pmgr.Warnings() {
+				fmt.Fprintf(os.Stderr, "warning: profile %q — %s\n", w.Dir, w.Message)
 			}
 			store := analyticsStore()
 			_ = store.Load()
@@ -729,19 +1105,19 @@ local-agent session. Prefer profile skill lists for durable harness behavior.
 			engine.IncludeEvidence = true
 			suggestions := engine.Analyze()
 
-			if apply {
-				applied, skipped, err := suggest.ApplyAuto(mgr, suggestions)
+			if apply || applyLocal {
+				applied, skipped, err := suggest.ApplyAuto(mgr, pmgr, suggestions, applyLocal)
 				if err != nil {
 					return err
 				}
 				for _, name := range applied {
-					fmt.Printf("activated: %s\n", name)
+					fmt.Printf("applied: %s\n", name)
 				}
 				for _, s := range skipped {
 					fmt.Printf("skipped: %s\n", s)
 				}
 				_ = store.Record("suggestion_applied", fmt.Sprintf("%d", len(applied)), strings.Join(applied, ","))
-				fmt.Printf("\n%d skills activated, %d skipped\n", len(applied), len(skipped))
+				fmt.Printf("\n%d applied, %d skipped\n", len(applied), len(skipped))
 				return nil
 			}
 
@@ -764,12 +1140,16 @@ local-agent session. Prefer profile skill lists for durable harness behavior.
 				if s.Action != "" {
 					fmt.Printf("       → %s\n", s.Action)
 				}
+				if len(s.Source) > 0 {
+					fmt.Printf("       source: %s\n", strings.Join(s.Source, ", "))
+				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
-	cmd.Flags().BoolVar(&apply, "apply", false, "auto-apply allowlisted activate suggestions")
+	cmd.Flags().BoolVar(&apply, "apply", false, "auto-apply allowlisted profile add-skills suggestions")
+	cmd.Flags().BoolVar(&applyLocal, "apply-local", false, "also auto-apply Minerva-local skill activate")
 	return cmd
 }
 
@@ -778,28 +1158,41 @@ local-agent session. Prefer profile skill lists for durable harness behavior.
 func newTemplateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "template",
-		Short: "Manage system prompt templates",
+		Short: "Manage system prompt templates (builtin + ~/.agents/templates)",
 	}
 	cmd.AddCommand(
 		newTemplateListCmd(),
 		newTemplateShowCmd(),
 		newTemplateApplyCmd(),
+		newTemplateInstallCmd(),
+		newTemplateSaveCmd(),
 	)
 	return cmd
+}
+
+func templateDirs() []string {
+	return []string{templates.DefaultDir(agentsDir())}
 }
 
 func newTemplateListCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List available templates",
+		Short: "List available templates (disk overrides builtins)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			all := templates.All()
+			all, err := templates.Catalog(templateDirs()...)
+			if err != nil {
+				return err
+			}
 			if jsonOut {
 				return printJSON(all)
 			}
 			for _, t := range all {
-				fmt.Printf("%-25s %s\n", t.Name, t.Description)
+				src := t.Source
+				if src == "" {
+					src = "builtin"
+				}
+				fmt.Printf("%-25s [%s] %s\n", t.Name, src, t.Description)
 				if len(t.Skills) > 0 {
 					fmt.Printf("  skills: %s\n", strings.Join(t.Skills, ", "))
 				}
@@ -817,11 +1210,15 @@ func newTemplateShowCmd() *cobra.Command {
 		Short: "Show a template's full prompt",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t := templates.Get(args[0])
+			t := templates.GetFrom(args[0], templateDirs()...)
 			if t == nil {
-				return fmt.Errorf("template %q not found; available: %s", args[0], strings.Join(templates.Names(), ", "))
+				return fmt.Errorf("template %q not found; available: %s", args[0], strings.Join(templates.NamesFrom(templateDirs()...), ", "))
 			}
 			fmt.Printf("Name:        %s\n", t.Name)
+			fmt.Printf("Source:      %s\n", t.Source)
+			if t.Path != "" {
+				fmt.Printf("Path:        %s\n", t.Path)
+			}
 			fmt.Printf("Description: %s\n", t.Description)
 			fmt.Printf("Role:        %s\n", t.Role)
 			fmt.Printf("Skills:      %s\n", strings.Join(t.Skills, ", "))
@@ -839,9 +1236,9 @@ func newTemplateApplyCmd() *cobra.Command {
 		Short: "Apply a template to create or update a profile",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t := templates.Get(args[0])
+			t := templates.GetFrom(args[0], templateDirs()...)
 			if t == nil {
-				return fmt.Errorf("template %q not found; available: %s", args[0], strings.Join(templates.Names(), ", "))
+				return fmt.Errorf("template %q not found; available: %s", args[0], strings.Join(templates.NamesFrom(templateDirs()...), ", "))
 			}
 
 			pmgr := profileManager()
@@ -856,7 +1253,6 @@ func newTemplateApplyCmd() *cobra.Command {
 
 			existing := pmgr.Get(name)
 			if existing != nil {
-				// Update existing profile
 				if err := pmgr.UpdateSystemPrompt(name, t.Prompt); err != nil {
 					return err
 				}
@@ -865,7 +1261,6 @@ func newTemplateApplyCmd() *cobra.Command {
 				}
 				fmt.Printf("profile %q updated from template %q\n", name, t.Name)
 			} else {
-				// Create new profile
 				p := &profile.Profile{
 					Name:         name,
 					Description:  t.Description,
@@ -886,6 +1281,226 @@ func newTemplateApplyCmd() *cobra.Command {
 	return cmd
 }
 
+func newTemplateInstallCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "install <name>",
+		Short: "Copy a builtin template to ~/.agents/templates for editing",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := templates.DefaultDir(agentsDir())
+			t, err := templates.InstallBuiltin(dir, args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("template %q installed to %s\n", t.Name, t.Path)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newTemplateSaveCmd() *cobra.Command {
+	var description, role, prompt, fromFile string
+	var skills []string
+	cmd := &cobra.Command{
+		Use:   "save <name>",
+		Short: "Save/create a disk template under ~/.agents/templates",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			body := prompt
+			if fromFile != "" {
+				data, err := os.ReadFile(fromFile)
+				if err != nil {
+					return err
+				}
+				body = string(data)
+			}
+			if strings.TrimSpace(body) == "" {
+				return fmt.Errorf("prompt required (--prompt or --from-file)")
+			}
+			t := templates.Template{
+				Name:        args[0],
+				Description: description,
+				Role:        role,
+				Skills:      skills,
+				Prompt:      body,
+			}
+			dir := templates.DefaultDir(agentsDir())
+			if err := templates.Save(dir, t); err != nil {
+				return err
+			}
+			fmt.Printf("template %q saved to %s\n", t.Name, filepath.Join(dir, t.Name, "template.yaml"))
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&description, "description", "d", "", "one-line description")
+	cmd.Flags().StringVarP(&role, "role", "r", "", "role label")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "system prompt body")
+	cmd.Flags().StringVar(&fromFile, "from-file", "", "read prompt from file")
+	cmd.Flags().StringSliceVarP(&skills, "skill", "s", nil, "recommended skill names")
+	return cmd
+}
+
+// --- Library commands ---
+
+func newLibraryCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "library",
+		Short: "Export, import, and lint the shared agents library",
+	}
+	cmd.AddCommand(
+		newLibraryExportCmd(),
+		newLibraryImportCmd(),
+		newLibraryLintCmd(),
+	)
+	return cmd
+}
+
+func newLibraryExportCmd() *cobra.Command {
+	var note string
+	var noTemplates bool
+	cmd := &cobra.Command{
+		Use:   "export <dest>",
+		Short: "Export skills/profiles/templates to a directory or .tar.gz",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := library.Export(library.ExportOptions{
+				AgentsDir:        agentsDir(),
+				Dest:             args[0],
+				IncludeTemplates: !noTemplates,
+				Note:             note,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("exported %s (%s): skills=%d profiles=%d templates=%d\n",
+				res.Path, res.Format, res.Manifest.Skills, res.Manifest.Profiles, res.Manifest.Templates)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&note, "note", "", "manifest note")
+	cmd.Flags().BoolVar(&noTemplates, "no-templates", false, "omit templates from export")
+	return cmd
+}
+
+func newLibraryImportCmd() *cobra.Command {
+	var force bool
+	var noTemplates bool
+	cmd := &cobra.Command{
+		Use:   "import <source>",
+		Short: "Import a library bundle into ~/.agents",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := library.Import(library.ImportOptions{
+				Source:           args[0],
+				AgentsDir:        agentsDir(),
+				Force:            force,
+				IncludeTemplates: !noTemplates,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("imported skills=%d profiles=%d templates=%d skipped=%d\n",
+				res.Skills, res.Profiles, res.Templates, res.Skipped)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing skill/profile/template dirs")
+	cmd.Flags().BoolVar(&noTemplates, "no-templates", false, "skip templates in the bundle")
+	return cmd
+}
+
+func newLibraryLintCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "lint",
+		Short: "Lint skills, profiles, and templates for structural issues",
+		Long:  `Checks missing descriptions, broken skill refs, empty prompts, orphan skills, and possible secrets.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			rep, err := library.Lint(agentsDir())
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				if err := printJSON(rep); err != nil {
+					return err
+				}
+			} else {
+				fmt.Print(library.FormatHuman(rep))
+			}
+			if !rep.OK {
+				return ExitCode(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
+	return cmd
+}
+
+// --- Bridge (local-agent integration) ---
+
+func newBridgeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "bridge",
+		Short: "Generate local-agent integration snippets for a profile",
+	}
+	cmd.AddCommand(newBridgeShowCmd())
+	return cmd
+}
+
+func newBridgeShowCmd() *cobra.Command {
+	var format, harness, outPath string
+	cmd := &cobra.Command{
+		Use:   "show <profile>",
+		Short: "Print launch + MCP trust docs for a profile",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pmgr := profileManager()
+			if err := pmgr.LoadAll(); err != nil {
+				return err
+			}
+			p := pmgr.Get(args[0])
+			if p == nil {
+				return fmt.Errorf("profile %q not found", args[0])
+			}
+			fmtFormat := bridge.FormatMarkdown
+			switch strings.ToLower(format) {
+			case "shell", "sh", "bash":
+				fmtFormat = bridge.FormatShell
+			case "yaml", "yml":
+				fmtFormat = bridge.FormatYAML
+			case "md", "markdown", "":
+				fmtFormat = bridge.FormatMarkdown
+			default:
+				return fmt.Errorf("unknown format %q (md|shell|yaml)", format)
+			}
+			snip, err := bridge.Render(p, bridge.Options{
+				AgentsDir:     agentsDir(),
+				ProfileName:  p.Name,
+				Harness:       harness,
+				MinervaBinary: "minerva",
+			}, fmtFormat)
+			if err != nil {
+				return err
+			}
+			if outPath != "" {
+				if err := os.WriteFile(outPath, []byte(snip.Body), 0o644); err != nil {
+					return err
+				}
+				fmt.Printf("wrote %s\n", outPath)
+				return nil
+			}
+			fmt.Print(snip.Body)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&format, "format", "f", "md", "md|shell|yaml")
+	cmd.Flags().StringVar(&harness, "harness", "local-agent", "harness name for docs")
+	cmd.Flags().StringVarP(&outPath, "out", "o", "", "write to file instead of stdout")
+	return cmd
+}
+
 // --- Evidence (fcheap conventions) ---
 
 func newEvidenceCmd() *cobra.Command {
@@ -897,6 +1512,7 @@ func newEvidenceCmd() *cobra.Command {
 	cmd.AddCommand(
 		newEvidenceSaveCmd(),
 		newEvidenceSearchCmd(),
+		newEvidenceCloseCmd(),
 		newEvidenceDocsCmd(),
 	)
 	return cmd
@@ -965,6 +1581,37 @@ func newEvidenceSearchCmd() *cobra.Command {
 	return cmd
 }
 
+func newEvidenceCloseCmd() *cobra.Command {
+	var note, kind string
+	cmd := &cobra.Command{
+		Use:   "close <stash-id>",
+		Short: "Mark a fail stash resolved via a close receipt",
+		Long: `fcheap has no in-place re-tag. close writes a pass receipt tagged
+closes:<id> + outcome:closed. Open fails = outcome:fail without a matching receipt.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := evidence.Close(cmd.Context(), evidence.CloseRequest{
+				StashID: args[0],
+				Note:    note,
+				Kind:    kind,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("closed %s", res.ClosedID)
+			if res.ReceiptID != "" {
+				fmt.Printf(" receipt=%s", res.ReceiptID)
+			}
+			fmt.Println()
+			_ = analyticsStore().Record("evidence_close", res.ClosedID, res.ReceiptID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&note, "note", "n", "", "optional resolution note")
+	cmd.Flags().StringVarP(&kind, "kind", "k", "eval", "eval|suggest|stack|incident|other")
+	return cmd
+}
+
 func newEvidenceDocsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "docs",
@@ -1017,7 +1664,7 @@ func newInitCmd() *cobra.Command {
 		Short: "Initialize the agents directory structure",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dir := agentsDir()
-			subdirs := []string{"agents", "skills", "tasks", "memories"}
+			subdirs := []string{"agents", "skills", "templates", "tasks", "memories"}
 			for _, sub := range subdirs {
 				path := filepath.Join(dir, sub)
 				if err := os.MkdirAll(path, 0o755); err != nil {
@@ -1078,4 +1725,53 @@ func firstLineCLI(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return s
+}
+
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func profileYAML(p *profile.Profile) (string, error) {
+	// Stable, human-oriented projection for diffs (ignore Path).
+	var b strings.Builder
+	fmt.Fprintf(&b, "name: %s\n", p.Name)
+	if p.Description != "" {
+		fmt.Fprintf(&b, "description: %s\n", p.Description)
+	}
+	if p.Model != "" {
+		fmt.Fprintf(&b, "model: %s\n", p.Model)
+	}
+	fmt.Fprintf(&b, "skills: [%s]\n", strings.Join(p.Skills, ", "))
+	fmt.Fprintf(&b, "mcp_servers: [%s]\n", strings.Join(p.MCPServers, ", "))
+	if len(p.UseCases) > 0 {
+		fmt.Fprintf(&b, "use_cases: [%s]\n", strings.Join(p.UseCases, ", "))
+	}
+	fmt.Fprintf(&b, "system_prompt: |\n")
+	for _, line := range strings.Split(p.SystemPrompt, "\n") {
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	return b.String(), nil
+}
+
+// resolveContentArg returns content from args[idx] or --from-file.
+func resolveContentArg(args []string, idx int, fromFile string) (string, error) {
+	if fromFile != "" {
+		data, err := os.ReadFile(fromFile)
+		if err != nil {
+			return "", fmt.Errorf("read --from-file: %w", err)
+		}
+		return string(data), nil
+	}
+	if idx < len(args) {
+		return args[idx], nil
+	}
+	return "", nil
 }

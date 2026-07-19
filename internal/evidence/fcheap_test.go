@@ -32,9 +32,24 @@ func TestStandardTags(t *testing.T) {
 	}
 }
 
+func TestStandardTags_Closed(t *testing.T) {
+	tags := StandardTags("eval", "pass", []string{TagClosesPrefix + "abc", TagOutcomeClosed})
+	joined := strings.Join(tags, " ")
+	if !strings.Contains(joined, TagMinerva) || !strings.Contains(joined, TagEval) {
+		t.Fatalf("tags=%v", tags)
+	}
+	if !strings.Contains(joined, TagClosesPrefix+"abc") || !strings.Contains(joined, TagOutcomeClosed) {
+		t.Fatalf("close tags missing: %v", tags)
+	}
+}
+
 func TestDocs(t *testing.T) {
-	if !strings.Contains(Docs(), "minerva-eval") {
-		t.Fatal("docs missing convention")
+	docs := Docs()
+	if !strings.Contains(docs, "minerva-eval") {
+		t.Fatal("missing minerva-eval in docs")
+	}
+	if !strings.Contains(docs, "evidence close") && !strings.Contains(docs, "closes:") {
+		t.Fatal("docs should mention close loop")
 	}
 }
 

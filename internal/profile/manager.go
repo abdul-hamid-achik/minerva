@@ -26,10 +26,18 @@ type Profile struct {
 	Path         string   `yaml:"-" json:"path"`
 }
 
+// LoadWarning is a non-fatal issue discovered while loading profiles.
+type LoadWarning struct {
+	Dir     string `json:"dir"`
+	Path    string `json:"path,omitempty"`
+	Message string `json:"message"`
+}
+
 // Manager handles agent profile discovery and management.
 type Manager struct {
 	mu       sync.RWMutex
 	profiles map[string]*Profile
+	warnings []LoadWarning
 	dir      string
 }
 
@@ -42,11 +50,13 @@ func NewManager(dir string) *Manager {
 }
 
 // LoadAll discovers and loads all agent profiles from the agents directory.
+// Unreadable or invalid profiles are skipped and recorded via Warnings().
 func (m *Manager) LoadAll() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.profiles = make(map[string]*Profile)
+	m.warnings = nil
 
 	agentsDir := filepath.Join(m.dir, "agents")
 	entries, err := os.ReadDir(agentsDir)
@@ -73,15 +83,26 @@ func (m *Manager) LoadAll() error {
 				break
 			}
 			if !os.IsNotExist(readErr) {
+				m.warnings = append(m.warnings, LoadWarning{
+					Dir:     entry.Name(),
+					Path:    candidate,
+					Message: fmt.Sprintf("read error: %v", readErr),
+				})
 				return fmt.Errorf("read agent profile %s: %w", candidate, readErr)
 			}
 		}
 		if profilePath == "" {
+			// Directory without agent.yaml/agent.md — skip silently (may be WIP).
 			continue
 		}
 
 		var profile Profile
 		if err := yaml.Unmarshal(data, &profile); err != nil {
+			m.warnings = append(m.warnings, LoadWarning{
+				Dir:     entry.Name(),
+				Path:    profilePath,
+				Message: fmt.Sprintf("invalid YAML: %v", err),
+			})
 			continue
 		}
 
@@ -94,6 +115,18 @@ func (m *Manager) LoadAll() error {
 	}
 
 	return nil
+}
+
+// Warnings returns non-fatal load issues (e.g. unreadable YAML).
+func (m *Manager) Warnings() []LoadWarning {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.warnings) == 0 {
+		return nil
+	}
+	out := make([]LoadWarning, len(m.warnings))
+	copy(out, m.warnings)
+	return out
 }
 
 // All returns all discovered profiles sorted by name.
@@ -178,17 +211,7 @@ func (m *Manager) UpdateSystemPrompt(name, prompt string) error {
 	}
 
 	profile.SystemPrompt = prompt
-
-	data, err := yaml.Marshal(profile)
-	if err != nil {
-		return fmt.Errorf("marshal profile: %w", err)
-	}
-
-	if err := os.WriteFile(profile.Path, data, 0o644); err != nil {
-		return fmt.Errorf("write profile: %w", err)
-	}
-
-	return nil
+	return m.writeProfileLocked(profile)
 }
 
 // UpdateSkills replaces the skills list for a profile.
@@ -202,17 +225,7 @@ func (m *Manager) UpdateSkills(name string, skills []string) error {
 	}
 
 	profile.Skills = skills
-
-	data, err := yaml.Marshal(profile)
-	if err != nil {
-		return fmt.Errorf("marshal profile: %w", err)
-	}
-
-	if err := os.WriteFile(profile.Path, data, 0o644); err != nil {
-		return fmt.Errorf("write profile: %w", err)
-	}
-
-	return nil
+	return m.writeProfileLocked(profile)
 }
 
 // AddSkills merges skill names into a profile without dropping existing ones.
@@ -225,9 +238,116 @@ func (m *Manager) AddSkills(name string, add []string) error {
 		return fmt.Errorf("profile %q not found", name)
 	}
 
-	seen := make(map[string]bool, len(profile.Skills)+len(add))
-	merged := make([]string, 0, len(profile.Skills)+len(add))
+	profile.Skills = mergeUnique(profile.Skills, add)
+	return m.writeProfileLocked(profile)
+}
+
+// RemoveSkills drops skill names from a profile (no-op for missing names).
+func (m *Manager) RemoveSkills(name string, remove []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	profile, ok := m.profiles[name]
+	if !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+
+	drop := make(map[string]bool, len(remove))
+	for _, s := range remove {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			drop[s] = true
+		}
+	}
+	kept := make([]string, 0, len(profile.Skills))
 	for _, s := range profile.Skills {
+		s = strings.TrimSpace(s)
+		if s == "" || drop[s] {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	profile.Skills = kept
+	return m.writeProfileLocked(profile)
+}
+
+// UpdateModel sets the model field for a profile.
+func (m *Manager) UpdateModel(name, model string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	profile, ok := m.profiles[name]
+	if !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	profile.Model = model
+	return m.writeProfileLocked(profile)
+}
+
+// UpdateMCPServers replaces the MCP server allowlist for a profile.
+func (m *Manager) UpdateMCPServers(name string, servers []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	profile, ok := m.profiles[name]
+	if !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	cleaned := make([]string, 0, len(servers))
+	seen := make(map[string]bool, len(servers))
+	for _, s := range servers {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		cleaned = append(cleaned, s)
+	}
+	profile.MCPServers = cleaned
+	return m.writeProfileLocked(profile)
+}
+
+// UpdateDescription sets the description for a profile.
+func (m *Manager) UpdateDescription(name, description string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	profile, ok := m.profiles[name]
+	if !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	profile.Description = description
+	return m.writeProfileLocked(profile)
+}
+
+// SystemPromptContent returns the system prompt for a profile, or empty string.
+func (m *Manager) SystemPromptContent(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	profile, ok := m.profiles[name]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(profile.SystemPrompt)
+}
+
+// writeProfileLocked marshals and writes a profile. Caller must hold m.mu.
+func (m *Manager) writeProfileLocked(profile *Profile) error {
+	data, err := yaml.Marshal(profile)
+	if err != nil {
+		return fmt.Errorf("marshal profile: %w", err)
+	}
+	if err := os.WriteFile(profile.Path, data, 0o644); err != nil {
+		return fmt.Errorf("write profile: %w", err)
+	}
+	return nil
+}
+
+func mergeUnique(existing, add []string) []string {
+	seen := make(map[string]bool, len(existing)+len(add))
+	merged := make([]string, 0, len(existing)+len(add))
+	for _, s := range existing {
 		s = strings.TrimSpace(s)
 		if s == "" || seen[s] {
 			continue
@@ -243,26 +363,5 @@ func (m *Manager) AddSkills(name string, add []string) error {
 		seen[s] = true
 		merged = append(merged, s)
 	}
-	profile.Skills = merged
-
-	data, err := yaml.Marshal(profile)
-	if err != nil {
-		return fmt.Errorf("marshal profile: %w", err)
-	}
-	if err := os.WriteFile(profile.Path, data, 0o644); err != nil {
-		return fmt.Errorf("write profile: %w", err)
-	}
-	return nil
-}
-
-// SystemPromptContent returns the system prompt for a profile, or empty string.
-func (m *Manager) SystemPromptContent(name string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	profile, ok := m.profiles[name]
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(profile.SystemPrompt)
+	return merged
 }

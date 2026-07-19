@@ -45,6 +45,7 @@ Creates:
 ~/.agents/
   agents/     # profiles (agent.yaml)
   skills/     # SKILL.md definitions
+  templates/  # disk role templates
   tasks/
   memories/
 ```

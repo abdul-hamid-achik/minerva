@@ -1,10 +1,9 @@
 // Package suggest produces ranked, actionable recommendations from skills,
 // profiles, stack presence, analytics, and workspace type.
 //
-// Activation suggestions target Minerva's activation state under
-// ~/.agents/.minerva-skills.json. They do NOT inject skills into a live
-// local-agent session; local-agent loads profile skills and /skill from disk
-// and its own session state. Prefer profile membership for durable behavior.
+// Durable recommendations prefer profile skill membership (shared SSOT with
+// local-agent). Minerva-local activation under ~/.agents/.minerva-skills.json
+// is still available but is not the default auto-apply path.
 package suggest
 
 import (
@@ -25,12 +24,22 @@ import (
 
 // Suggestion is one actionable recommendation.
 type Suggestion struct {
-	Priority  int    `json:"priority"` // 1=critical, 2=high, 3=medium, 4=low
-	Category  string `json:"category"`
-	Message   string `json:"message"`
-	Action    string `json:"action,omitempty"`
-	AutoApply bool   `json:"auto_apply"`
+	Priority  int      `json:"priority"` // 1=critical, 2=high, 3=medium, 4=low
+	Category  string   `json:"category"`
+	Message   string   `json:"message"`
+	Action    string   `json:"action,omitempty"`
+	AutoApply bool     `json:"auto_apply"`
+	Source    []string `json:"source,omitempty"` // e.g. readiness:codemap, evidence, library
 }
+
+// Default per-category caps after ranking (anti-noise). Priority-1 is never capped out first.
+const (
+	maxPerCategoryDefault = 8
+	maxCrossProfile       = 5
+	maxWorkspaceSkills    = 5
+	maxMCPHubUnused       = 4
+	maxEvidenceItems      = 8
+)
 
 // Engine produces suggestions.
 type Engine struct {
@@ -42,6 +51,8 @@ type Engine struct {
 	IncludeReadiness bool
 	// IncludeEvidence reads fcheap outcome:fail stashes for skill/profile suggestions.
 	IncludeEvidence bool
+	// MaxPerCategory overrides default cap (0 = default).
+	MaxPerCategory int
 }
 
 // NewEngine creates a suggestion engine (presence-level only; enable IncludeReadiness for deep probes).
@@ -79,16 +90,81 @@ func (e *Engine) Analyze() []Suggestion {
 	})
 
 	suggestions = dedupeSuggestions(suggestions)
+	suggestions = capSuggestions(suggestions, e.MaxPerCategory)
 
 	if len(suggestions) == 0 {
 		suggestions = append(suggestions, Suggestion{
 			Priority: 4,
 			Category: "general",
 			Message:  "Library and core stack look fine. Activation is Minerva-local; use profiles for durable local-agent behavior.",
+			Source:   []string{"library"},
 		})
 	}
 
 	return suggestions
+}
+
+// sug is a small constructor so callers set Source consistently.
+func sug(priority int, category, message, action string, auto bool, source ...string) Suggestion {
+	return Suggestion{
+		Priority:  priority,
+		Category:  category,
+		Message:   message,
+		Action:    action,
+		AutoApply: auto,
+		Source:    source,
+	}
+}
+
+func capSuggestions(in []Suggestion, maxPerCat int) []Suggestion {
+	if maxPerCat <= 0 {
+		maxPerCat = maxPerCategoryDefault
+	}
+	// Special sub-caps by message fingerprint / category.
+	counts := map[string]int{}
+	cross := 0
+	workspace := 0
+	unused := 0
+	evidence := 0
+	out := make([]Suggestion, 0, len(in))
+	for _, s := range in {
+		// Never drop criticals due to category noise.
+		if s.Priority == 1 {
+			out = append(out, s)
+			counts[s.Category]++
+			continue
+		}
+		if s.Category == "profile" && strings.Contains(s.Message, "missing skill") && strings.Contains(s.Message, "other profiles") {
+			if cross >= maxCrossProfile {
+				continue
+			}
+			cross++
+		}
+		if s.Category == "profile" && strings.Contains(s.Message, "Workspace looks like") {
+			if workspace >= maxWorkspaceSkills {
+				continue
+			}
+			workspace++
+		}
+		if s.Category == "mcphub" && strings.Contains(s.Message, "unused") {
+			if unused >= maxMCPHubUnused {
+				continue
+			}
+			unused++
+		}
+		if s.Category == "evidence" {
+			if evidence >= maxEvidenceItems {
+				continue
+			}
+			evidence++
+		}
+		if counts[s.Category] >= maxPerCat {
+			continue
+		}
+		counts[s.Category]++
+		out = append(out, s)
+	}
+	return out
 }
 
 func dedupeSuggestions(in []Suggestion) []Suggestion {
@@ -118,36 +194,31 @@ func (e *Engine) skillGapSuggestions() []Suggestion {
 
 	for _, s := range allSkills {
 		if s.Description == "" {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "skill",
-				Message:   fmt.Sprintf("Skill %q has no description — agents discover it poorly from the catalog", s.Name),
-				Action:    fmt.Sprintf("# edit ~/.agents/skills/%s/SKILL.md frontmatter description", s.Name),
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "skill",
+				fmt.Sprintf("Skill %q has no description — agents discover it poorly from the catalog", s.Name),
+				fmt.Sprintf("minerva skill update %s -d \"...\"", s.Name),
+				false, "library", "skill:"+s.Name))
 		}
 	}
 
 	if inactiveCount > 10 {
-		suggestions = append(suggestions, Suggestion{
-			Priority:  3,
-			Category:  "skill",
-			Message:   fmt.Sprintf("%d skills are inactive in Minerva's local activation set — review with minerva skill list", inactiveCount),
-			Action:    "minerva skill list",
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(3, "skill",
+			fmt.Sprintf("%d skills are inactive in Minerva's local activation set — review with minerva skill list", inactiveCount),
+			"minerva skill list", false, "library"))
 	}
 
 	if e.analytics != nil {
 		for _, ts := range e.analytics.TopSkills(5) {
-			if !e.skillMgr.IsActive(ts.Name) && e.skillMgr.Has(ts.Name) {
-				suggestions = append(suggestions, Suggestion{
-					Priority:  2,
-					Category:  "skill",
-					Message:   fmt.Sprintf("Skill %q is frequently activated but not currently active in Minerva state", ts.Name),
-					Action:    fmt.Sprintf("minerva skill activate %s", ts.Name),
-					AutoApply: true,
-				})
+			if !e.skillMgr.Has(ts.Name) {
+				continue
+			}
+			if e.skillInAnyProfile(ts.Name) {
+				continue
+			}
+			if action, auto := e.profileAddSkillAction(ts.Name); action != "" {
+				suggestions = append(suggestions, sug(2, "profile",
+					fmt.Sprintf("Skill %q is frequently used in Minerva analytics but not on any profile — add it for durable local-agent loading", ts.Name),
+					action, auto, "analytics", "skill:"+ts.Name))
 			}
 		}
 	}
@@ -158,44 +229,39 @@ func (e *Engine) skillGapSuggestions() []Suggestion {
 func (e *Engine) profileGapSuggestions() []Suggestion {
 	var suggestions []Suggestion
 
+	for _, w := range e.profileMgr.Warnings() {
+		suggestions = append(suggestions, sug(1, "profile",
+			fmt.Sprintf("Profile directory %q unreadable — %s", w.Dir, w.Message),
+			fmt.Sprintf("# fix %s", firstNonEmpty(w.Path, w.Dir)),
+			false, "library", "profile:"+w.Dir))
+	}
+
 	for _, p := range e.profileMgr.All() {
 		if strings.TrimSpace(p.SystemPrompt) == "" {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  1,
-				Category:  "profile",
-				Message:   fmt.Sprintf("Profile %q has no system prompt — local-agent loads this into session context", p.Name),
-				Action:    fmt.Sprintf("minerva profile update-prompt %q \"<system prompt>\"", p.Name),
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(1, "profile",
+				fmt.Sprintf("Profile %q has no system prompt — local-agent loads this into session context", p.Name),
+				fmt.Sprintf("minerva profile update-prompt %q \"<system prompt>\"", p.Name),
+				false, "library", "profile:"+p.Name))
 		}
 		if len(p.Skills) == 0 {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "profile",
-				Message:   fmt.Sprintf("Profile %q has no skills — local-agent will not auto-activate specialized knowledge", p.Name),
-				Action:    fmt.Sprintf("minerva profile update-skills %q \"skill1,skill2\"", p.Name),
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "profile",
+				fmt.Sprintf("Profile %q has no skills — local-agent will not auto-activate specialized knowledge", p.Name),
+				fmt.Sprintf("minerva profile add-skills %q skill1,skill2", p.Name),
+				false, "library", "profile:"+p.Name))
 		}
 		if p.Model == "" {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  4,
-				Category:  "profile",
-				Message:   fmt.Sprintf("Profile %q has no model — harness default will be used", p.Name),
-				Action:    "",
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(4, "profile",
+				fmt.Sprintf("Profile %q has no model — harness default will be used", p.Name),
+				fmt.Sprintf("minerva profile update-model %q <model>", p.Name),
+				false, "library", "profile:"+p.Name))
 		}
 		// Validate profile skills exist on disk
 		for _, sk := range p.Skills {
 			if !e.skillMgr.Has(sk) {
-				suggestions = append(suggestions, Suggestion{
-					Priority:  1,
-					Category:  "profile",
-					Message:   fmt.Sprintf("Profile %q references missing skill %q", p.Name, sk),
-					Action:    fmt.Sprintf("minerva skill list  # fix profile %q skills", p.Name),
-					AutoApply: false,
-				})
+				suggestions = append(suggestions, sug(1, "profile",
+					fmt.Sprintf("Profile %q references missing skill %q", p.Name, sk),
+					fmt.Sprintf("minerva profile remove-skills %q %s", p.Name, sk),
+					false, "library", "profile:"+p.Name, "skill:"+sk))
 			}
 		}
 	}
@@ -218,23 +284,15 @@ func (e *Engine) stackHealthSuggestions() []Suggestion {
 		if tool.Tier == monitor.TierInfra {
 			prio = 4
 		}
-		suggestions = append(suggestions, Suggestion{
-			Priority:  prio,
-			Category:  "stack",
-			Message:   fmt.Sprintf("Tool %q (binary %q) is missing — %s", tool.Name, tool.Command, tool.Description),
-			Action:    monitor.InstallHint(tool.Name),
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(prio, "stack",
+			fmt.Sprintf("Tool %q (binary %q) is missing — %s", tool.Name, tool.Command, tool.Description),
+			monitor.InstallHint(tool.Name), false, "presence", "tool:"+tool.Name))
 	}
 
 	if status.CoreHealthy && status.Degraded {
-		suggestions = append(suggestions, Suggestion{
-			Priority:  4,
-			Category:  "stack",
-			Message:   "Core stack is present; some optional tools are missing (eval/ops degraded, not critical)",
-			Action:    "minerva stack check --json",
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(4, "stack",
+			"Core stack is present; some optional tools are missing (eval/ops degraded, not critical)",
+			"minerva stack check --json", false, "presence"))
 	}
 
 	return suggestions
@@ -266,37 +324,23 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 		if len(r.NextActions) > 0 {
 			action = r.NextActions[0]
 		}
-		suggestions = append(suggestions, Suggestion{
-			Priority:  prio,
-			Category:  "readiness",
-			Message:   msg,
-			Action:    action,
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(prio, "readiness", msg, action, false, "readiness:"+r.Tool))
 	}
 
 	if status.MCPHub != nil && status.MCPHub.Error == "" {
 		if status.MCPHub.TotalCalls > 20 && status.MCPHub.ErrorCount*100/maxInt(status.MCPHub.TotalCalls, 1) >= 15 {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "stack",
-				Message:   fmt.Sprintf("mcphub error rate is high (%d errors / %d calls) — inspect failing servers", status.MCPHub.ErrorCount, status.MCPHub.TotalCalls),
-				Action:    "mcphub stats --json",
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "stack",
+				fmt.Sprintf("mcphub error rate is high (%d errors / %d calls) — inspect failing servers", status.MCPHub.ErrorCount, status.MCPHub.TotalCalls),
+				"mcphub stats --json", false, "mcphub"))
 		}
 		for _, he := range status.MCPHub.HighErrorServers {
 			server := he
 			if i := strings.IndexByte(he, ':'); i > 0 {
 				server = he[:i]
 			}
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "stack",
-				Message:   fmt.Sprintf("mcphub server high error rate: %s", he),
-				Action:    fmt.Sprintf("mcphub doctor --server %s --probe --json", server),
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "stack",
+				fmt.Sprintf("mcphub server high error rate: %s", he),
+				fmt.Sprintf("mcphub doctor --server %s --probe --json", server), false, "mcphub", "server:"+server))
 		}
 		// Unused enabled servers (never called) — candidates to disable.
 		for _, u := range status.MCPHub.UnusedEnabled {
@@ -305,22 +349,14 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 			if u == "minerva" {
 				prio = 4
 			}
-			suggestions = append(suggestions, Suggestion{
-				Priority:  prio,
-				Category:  "mcphub",
-				Message:   fmt.Sprintf("mcphub server %q is enabled but unused (0 calls) — consider: mcphub disable %s", u, u),
-				Action:    fmt.Sprintf("mcphub disable %s", u),
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(prio, "mcphub",
+				fmt.Sprintf("mcphub server %q is enabled but unused (0 calls) — consider: mcphub disable %s", u, u),
+				fmt.Sprintf("mcphub disable %s", u), false, "mcphub", "server:"+u))
 		}
 		for _, a := range status.MCPHub.AgentsDrift {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "mcphub",
-				Message:   fmt.Sprintf("mcphub agent config drift: %s — run mcphub status / sync --write when ready", a),
-				Action:    "mcphub status --json",
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "mcphub",
+				fmt.Sprintf("mcphub agent config drift: %s — run mcphub status / sync --write when ready", a),
+				"mcphub status --json", false, "mcphub"))
 		}
 
 		// Profile mcp_servers allowlist hygiene against known hub servers.
@@ -336,13 +372,10 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 						continue
 					}
 					if !known[srv] {
-						suggestions = append(suggestions, Suggestion{
-							Priority:  2,
-							Category:  "profile",
-							Message:   fmt.Sprintf("profile %q allowlists unknown MCP server %q (not in mcphub)", p.Name, srv),
-							Action:    fmt.Sprintf("mcphub list --json  # fix profile %q mcp_servers", p.Name),
-							AutoApply: false,
-						})
+						suggestions = append(suggestions, sug(2, "profile",
+							fmt.Sprintf("profile %q allowlists unknown MCP server %q (not in mcphub)", p.Name, srv),
+							fmt.Sprintf("minerva profile update-mcp %q <fixed-list>", p.Name),
+							false, "mcphub", "profile:"+p.Name, "server:"+srv))
 					}
 				}
 			}
@@ -355,33 +388,21 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 			if len(status.Bob.NextActions) > 0 {
 				action = status.Bob.NextActions[0]
 			}
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "stack",
-				Message:   fmt.Sprintf("bob reports workspace drift (recipe=%s)", status.Bob.Recipe),
-				Action:    action,
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "stack",
+				fmt.Sprintf("bob reports workspace drift (recipe=%s)", status.Bob.Recipe),
+				action, false, "bob"))
 		}
 		// missing_manifest is informational — only suggest when next_actions present
 		if status.Bob.Code == "missing_manifest" && len(status.Bob.NextActions) > 0 {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  4,
-				Category:  "stack",
-				Message:   "workspace has no bob.yaml (optional; only needed for bob-managed repos)",
-				Action:    status.Bob.NextActions[0],
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(4, "stack",
+				"workspace has no bob.yaml (optional; only needed for bob-managed repos)",
+				status.Bob.NextActions[0], false, "bob"))
 		}
 		// Surface remaining bob next_actions as low priority when not already covered
 		if status.Bob.Code != "" && status.Bob.Code != "missing_manifest" && len(status.Bob.NextActions) > 0 {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "stack",
-				Message:   fmt.Sprintf("bob: %s", firstNonEmpty(status.Bob.RawNote, status.Bob.Code)),
-				Action:    status.Bob.NextActions[0],
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "stack",
+				fmt.Sprintf("bob: %s", firstNonEmpty(status.Bob.RawNote, status.Bob.Code)),
+				status.Bob.NextActions[0], false, "bob"))
 		}
 	}
 
@@ -393,13 +414,9 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 		} else if len(status.RetrievalGaps) == 1 && status.RetrievalGaps[0] == "vecgrep" {
 			action = "vecgrep index"
 		}
-		suggestions = append(suggestions, Suggestion{
-			Priority:  1,
-			Category:  "retrieval",
-			Message:   fmt.Sprintf("retrieval not ready — %s (do not trust semantic/graph answers until green)", status.RetrievalDetail),
-			Action:    action,
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(1, "retrieval",
+			fmt.Sprintf("retrieval not ready — %s (do not trust semantic/graph answers until green)", status.RetrievalDetail),
+			action, false, "retrieval"))
 	}
 
 	// Cortex task health (operator view — never mutates tasks).
@@ -409,54 +426,36 @@ func (e *Engine) readinessSuggestions() []Suggestion {
 			if len(status.Cortex.StaleSamples) > 0 {
 				action = fmt.Sprintf("cortex show %s", status.Cortex.StaleSamples[0].ID)
 			}
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "cortex",
-				Message:   fmt.Sprintf("cortex has %d stale sessions (active=%d total=%d) — review or resolve abandoned work", status.Cortex.Stale, status.Cortex.Active, status.Cortex.Sessions),
-				Action:    action,
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "cortex",
+				fmt.Sprintf("cortex has %d stale sessions (active=%d total=%d) — review or resolve abandoned work", status.Cortex.Stale, status.Cortex.Active, status.Cortex.Sessions),
+				action, false, "cortex"))
 		}
 		// Low verified rate with enough completed work is a process smell.
 		if status.Cortex.Completed >= 5 && status.Cortex.VerifiedRate < 0.1 {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "cortex",
-				Message:   fmt.Sprintf("cortex verified_rate is low (%.1f%% of %d sessions) — tasks complete without verification; prefer cortex verify before remember", status.Cortex.VerifiedRate*100, status.Cortex.Sessions),
-				Action:    "cortex overview --json",
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(2, "cortex",
+				fmt.Sprintf("cortex verified_rate is low (%.1f%% of %d sessions) — tasks complete without verification; prefer cortex verify before remember", status.Cortex.VerifiedRate*100, status.Cortex.Sessions),
+				"cortex overview --json", false, "cortex"))
 		}
 		if status.Cortex.ActiveWorkspace >= 3 {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  3,
-				Category:  "cortex",
-				Message:   fmt.Sprintf("%d active cortex sessions in this workspace — consider finishing or aborting before opening more", status.Cortex.ActiveWorkspace),
-				Action:    "cortex sessions --active --json",
-				AutoApply: false,
-			})
+			suggestions = append(suggestions, sug(3, "cortex",
+				fmt.Sprintf("%d active cortex sessions in this workspace — consider finishing or aborting before opening more", status.Cortex.ActiveWorkspace),
+				"cortex sessions --active --json", false, "cortex"))
 		}
 	}
 
 	return suggestions
 }
 
-// evidenceFailSuggestions reads fcheap minerva+outcome:fail stashes and maps tags to skills/profiles.
+// evidenceFailSuggestions reads open fcheap minerva+outcome:fail stashes (no close receipt).
 func (e *Engine) evidenceFailSuggestions() []Suggestion {
 	var suggestions []Suggestion
 
-	fails, err := evidence.ListOutcomeFails(context.Background())
+	fails, err := evidence.ListOpenOutcomeFails(context.Background())
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return nil
 		}
-		suggestions = append(suggestions, Suggestion{
-			Priority:  4,
-			Category:  "evidence",
-			Message:   fmt.Sprintf("could not list fcheap fails: %v", err),
-			AutoApply: false,
-		})
-		return suggestions
+		return []Suggestion{sug(4, "evidence", fmt.Sprintf("could not list fcheap fails: %v", err), "", false, "evidence")}
 	}
 	if len(fails) == 0 {
 		return nil
@@ -498,44 +497,30 @@ func (e *Engine) evidenceFailSuggestions() []Suggestion {
 		return list
 	}
 
-	suggestions = append(suggestions, Suggestion{
-		Priority:  2,
-		Category:  "evidence",
-		Message:   fmt.Sprintf("%d fcheap stashes tagged outcome:fail (minerva) — review with: fcheap list --tag minerva --tag outcome:fail --json", len(fails)),
-		Action:    "fcheap list --tag minerva --tag outcome:fail --json",
-		AutoApply: false,
-	})
+	firstID := fails[0].ID
+	closeHint := "minerva evidence close <stash-id>"
+	if firstID != "" {
+		closeHint = fmt.Sprintf("minerva evidence close %s", firstID)
+	}
+	suggestions = append(suggestions, sug(2, "evidence",
+		fmt.Sprintf("%d open fcheap outcome:fail stashes (minerva) — review or close resolved ones", len(fails)),
+		closeHint, false, "evidence"))
 
 	for _, c := range topN(skillFails, 5) {
 		action := fmt.Sprintf("minerva skill show %s", c.name)
-		if e.skillMgr != nil && e.skillMgr.IsActive(c.name) {
-			action = fmt.Sprintf("minerva skill deactivate %s", c.name)
-		}
-		suggestions = append(suggestions, Suggestion{
-			Priority:  2,
-			Category:  "evidence",
-			Message:   fmt.Sprintf("skill %q appears in %d failed evidence stashes — review or deactivate if harmful", c.name, c.count),
-			Action:    action,
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(2, "evidence",
+			fmt.Sprintf("skill %q appears in %d open failed evidence stashes — review body or profile membership", c.name, c.count),
+			action, false, "evidence", "skill:"+c.name))
 	}
 	for _, c := range topN(profileFails, 5) {
-		suggestions = append(suggestions, Suggestion{
-			Priority:  2,
-			Category:  "evidence",
-			Message:   fmt.Sprintf("profile %q appears in %d failed evidence stashes — review system prompt / skills", c.name, c.count),
-			Action:    fmt.Sprintf("minerva profile show %s", c.name),
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(2, "evidence",
+			fmt.Sprintf("profile %q appears in %d open failed evidence stashes — review system prompt / skills", c.name, c.count),
+			fmt.Sprintf("minerva profile show %s", c.name), false, "evidence", "profile:"+c.name))
 	}
 	if untagged > 0 {
-		suggestions = append(suggestions, Suggestion{
-			Priority:  3,
-			Category:  "evidence",
-			Message:   fmt.Sprintf("%d failed stashes lack skill:/profile: tags — tag future evidence for better attribution", untagged),
-			Action:    "minerva evidence docs",
-			AutoApply: false,
-		})
+		suggestions = append(suggestions, sug(3, "evidence",
+			fmt.Sprintf("%d open failed stashes lack skill:/profile: tags — tag future evidence for better attribution", untagged),
+			"minerva evidence docs", false, "evidence"))
 	}
 
 	return suggestions
@@ -565,24 +550,19 @@ func (e *Engine) analyticsSuggestions() []Suggestion {
 
 	summary := e.analytics.Summary()
 	if summary.TotalEvents == 0 {
-		suggestions = append(suggestions, Suggestion{
-			Priority:  4,
-			Category:  "analytics",
-			Message:   "No Minerva usage analytics yet — skill activate/create events will build a local history",
-			Action:    "minerva skill list",
-			AutoApply: false,
-		})
-		return suggestions
+		return []Suggestion{sug(4, "analytics",
+			"No Minerva usage analytics yet — skill activate/create events will build a local history",
+			"minerva skill list", false, "analytics")}
 	}
 
 	if len(summary.TopSkills) > 0 {
-		suggestions = append(suggestions, Suggestion{
-			Priority:  3,
-			Category:  "analytics",
-			Message:   fmt.Sprintf("Most-activated skills: %s — consider bundling into a profile for local-agent", strings.Join(summary.TopSkills, ", ")),
-			Action:    fmt.Sprintf("minerva profile create my-bundle -s %s", strings.Join(summary.TopSkills, ",")),
-			AutoApply: false,
-		})
+		action := fmt.Sprintf("minerva profile create my-bundle -s %s", strings.Join(summary.TopSkills, ","))
+		if profiles := e.profileMgr.All(); len(profiles) == 1 {
+			action = fmt.Sprintf("minerva profile add-skills %q %s", profiles[0].Name, strings.Join(summary.TopSkills, ","))
+		}
+		suggestions = append(suggestions, sug(3, "analytics",
+			fmt.Sprintf("Most-used skills in Minerva analytics: %s — put them on a profile for durable local-agent loading", strings.Join(summary.TopSkills, ", ")),
+			action, false, "analytics"))
 	}
 
 	return suggestions
@@ -610,15 +590,10 @@ func (e *Engine) crossProfileSuggestions() []Suggestion {
 		}
 		for skillName, count := range skillUsage {
 			if count >= 2 && !profileSkills[skillName] && e.skillMgr.Has(skillName) {
-				// Merge suggestion: show full new list, don't replace with one skill.
-				merged := append(append([]string{}, p.Skills...), skillName)
-				suggestions = append(suggestions, Suggestion{
-					Priority:  3,
-					Category:  "profile",
-					Message:   fmt.Sprintf("Profile %q is missing skill %q used by %d other profiles", p.Name, skillName, count),
-					Action:    fmt.Sprintf("minerva profile update-skills %q %q", p.Name, strings.Join(merged, ",")),
-					AutoApply: false,
-				})
+				suggestions = append(suggestions, sug(3, "profile",
+					fmt.Sprintf("Profile %q is missing skill %q used by %d other profiles", p.Name, skillName, count),
+					fmt.Sprintf("minerva profile add-skills %q %s", p.Name, skillName),
+					false, "library", "profile:"+p.Name, "skill:"+skillName))
 			}
 		}
 	}
@@ -652,18 +627,60 @@ func (e *Engine) workspaceAwareSuggestions() []Suggestion {
 	}
 
 	for _, skillName := range recommended {
-		if e.skillMgr.Has(skillName) && !e.skillMgr.IsActive(skillName) {
-			suggestions = append(suggestions, Suggestion{
-				Priority:  2,
-				Category:  "skill",
-				Message:   fmt.Sprintf("Workspace looks like %s — activate Minerva skill %q (Minerva-local; also add to a profile for local-agent)", projectType, skillName),
-				Action:    fmt.Sprintf("minerva skill activate %s", skillName),
-				AutoApply: true,
-			})
+		if !e.skillMgr.Has(skillName) {
+			continue
 		}
+		if e.skillInAnyProfile(skillName) {
+			continue
+		}
+		action, auto := e.profileAddSkillAction(skillName)
+		if action == "" {
+			continue
+		}
+		suggestions = append(suggestions, sug(2, "profile",
+			fmt.Sprintf("Workspace looks like %s — add skill %q to a profile for durable local-agent loading", projectType, skillName),
+			action, auto, "workspace:"+projectType, "skill:"+skillName))
 	}
 
 	return suggestions
+}
+
+// skillInAnyProfile reports whether any loaded profile already lists skillName.
+func (e *Engine) skillInAnyProfile(skillName string) bool {
+	if e.profileMgr == nil {
+		return false
+	}
+	for _, p := range e.profileMgr.All() {
+		for _, s := range p.Skills {
+			if s == skillName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// profileAddSkillAction returns a durable profile action for skillName.
+// AutoApply is true only when exactly one profile exists (unambiguous).
+func (e *Engine) profileAddSkillAction(skillName string) (action string, autoApply bool) {
+	if e.profileMgr == nil {
+		return "", false
+	}
+	profiles := e.profileMgr.All()
+	switch len(profiles) {
+	case 0:
+		return fmt.Sprintf("minerva profile create default -s %s", skillName), false
+	case 1:
+		return fmt.Sprintf("minerva profile add-skills %s %s", profiles[0].Name, skillName), true
+	default:
+		// Prefer a profile named after common defaults, else first alphabetically.
+		for _, preferred := range []string{"default", "dev", "code-reviewer"} {
+			if e.profileMgr.Has(preferred) {
+				return fmt.Sprintf("minerva profile add-skills %s %s", preferred, skillName), false
+			}
+		}
+		return fmt.Sprintf("minerva profile add-skills %s %s", profiles[0].Name, skillName), false
+	}
 }
 
 func detectProjectType(workspace string) string {
@@ -715,25 +732,100 @@ func detectJSFramework(workspace string) string {
 	return "javascript"
 }
 
-// ApplyAuto runs allowlisted auto-apply suggestions against the skill manager.
-// Only "minerva skill activate <name>" actions are executed.
-func ApplyAuto(skillMgr *skill.Manager, suggestions []Suggestion) (applied []string, skipped []string, err error) {
+// ApplyAuto runs allowlisted auto-apply suggestions.
+// Preferred: "minerva profile add-skills <profile> <skill>[,skill…]"
+// Legacy (opt-in via applyLocal): "minerva skill activate <name>"
+func ApplyAuto(skillMgr *skill.Manager, profileMgr *profile.Manager, suggestions []Suggestion, applyLocal bool) (applied []string, skipped []string, err error) {
 	for _, s := range suggestions {
 		if !s.AutoApply || s.Action == "" {
 			continue
 		}
-		name, ok := parseActivateAction(s.Action)
-		if !ok {
-			skipped = append(skipped, s.Action)
+		if profileName, skills, ok := parseAddSkillsAction(s.Action); ok {
+			if profileMgr == nil {
+				skipped = append(skipped, s.Action+" (no profile manager)")
+				continue
+			}
+			if err := profileMgr.AddSkills(profileName, skills); err != nil {
+				skipped = append(skipped, fmt.Sprintf("%s (%v)", s.Action, err))
+				continue
+			}
+			applied = append(applied, s.Action)
 			continue
 		}
-		if err := skillMgr.Activate(name); err != nil {
-			skipped = append(skipped, fmt.Sprintf("%s (%v)", name, err))
+		if name, ok := parseActivateAction(s.Action); ok {
+			if !applyLocal {
+				skipped = append(skipped, s.Action+" (use --apply-local for Minerva-only activate)")
+				continue
+			}
+			if skillMgr == nil {
+				skipped = append(skipped, s.Action+" (no skill manager)")
+				continue
+			}
+			if err := skillMgr.Activate(name); err != nil {
+				skipped = append(skipped, fmt.Sprintf("%s (%v)", name, err))
+				continue
+			}
+			applied = append(applied, "activate:"+name)
 			continue
 		}
-		applied = append(applied, name)
+		skipped = append(skipped, s.Action)
 	}
 	return applied, skipped, nil
+}
+
+func parseAddSkillsAction(action string) (profileName string, skills []string, ok bool) {
+	action = strings.TrimSpace(action)
+	const prefix = "minerva profile add-skills "
+	if !strings.HasPrefix(action, prefix) {
+		return "", nil, false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(action, prefix))
+	// Support: profile skill  OR  profile skill1,skill2  OR quoted profile
+	parts := splitActionArgs(rest)
+	if len(parts) < 2 {
+		return "", nil, false
+	}
+	profileName = parts[0]
+	// Remaining tokens may be comma-separated skills or space-separated.
+	var raw []string
+	for _, p := range parts[1:] {
+		for _, s := range strings.Split(p, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				raw = append(raw, s)
+			}
+		}
+	}
+	if profileName == "" || len(raw) == 0 {
+		return "", nil, false
+	}
+	return profileName, raw, true
+}
+
+// splitActionArgs splits on spaces while respecting simple double quotes.
+func splitActionArgs(s string) []string {
+	var out []string
+	var cur strings.Builder
+	inQuote := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case r == ' ' || r == '\t':
+			if inQuote {
+				cur.WriteRune(r)
+			} else if cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 func parseActivateAction(action string) (string, bool) {

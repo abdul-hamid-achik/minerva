@@ -51,6 +51,7 @@ Creates:
 ~/.agents/
   agents/       # agent profiles (agent.yaml)
   skills/       # skill definitions (SKILL.md)
+  templates/    # disk role templates (override builtins)
   tasks/        # reserved
   memories/     # reserved
 ```
@@ -65,8 +66,9 @@ Override root with `MINERVA_AGENTS_DIR` (tests should always use this).
 minerva skill list
 minerva skill show <name>
 minerva skill compare <a> <b>
-minerva skill create <name> <content> [-d description]
-minerva skill activate <name>     # Minerva-local only
+minerva skill create <name> [content] [-d description] [--from-file path]
+minerva skill update <name> [-d description] [--content body|--from-file path]
+minerva skill activate <name>     # Minerva-local catalog pin only
 minerva skill deactivate <name>
 minerva skill delete <name>
 ```
@@ -79,18 +81,36 @@ minerva profile show <name>
 minerva profile compare <a> <b>
 minerva profile create <name> [prompt] [-d desc] [-m model] [-s skill]...
 minerva profile update-prompt <name> <prompt>
-minerva profile update-skills <name> skill1,skill2
+minerva profile update-skills <name> skill1,skill2   # replace
+minerva profile add-skills <name> skill1,skill2     # merge (durable SSOT)
+minerva profile remove-skills <name> skill1,skill2
+minerva profile update-model <name> <model>
+minerva profile update-mcp <name> server1,server2
+minerva profile update-desc <name> <description>
 minerva profile delete <name>
+```
+
+### Status / doctor
+
+```bash
+minerva status                # unified library + presence + deep + evidence + next
+minerva doctor                # alias
+minerva status --json
+minerva status --require-retrieval
+minerva status --watch --interval 30s
 ```
 
 ### Stack
 
 ```bash
-minerva stack check           # presence, tiered
+minerva stack check           # presence, tiered; exit 1 if core missing
 minerva stack check --json
+minerva stack check --strict  # also exit 2 when optional tools missing
 minerva stack deep [workspace]
 minerva stack deep --json
 minerva stack deep --stash    # save report to fcheap (minerva-stack, TTL 30d)
+minerva stack deep --require-retrieval  # exit 3 if retrieval not ready
+minerva stack deep --require-core       # exit 1 if core presence incomplete
 ```
 
 `stack deep` sets **`retrieval_ready`** only when both **codemap** and **vecgrep** are domain-ready (indexed, not stale). Binary-on-PATH is not enough.
@@ -124,9 +144,12 @@ Core missing → unhealthy. Optional missing → degraded only.
 ```bash
 minerva suggest
 minerva suggest --json
-minerva suggest --apply          # only allowlisted skill activate actions
+minerva suggest --apply          # allowlisted profile add-skills actions
+minerva suggest --apply-local   # also Minerva-local skill activate
 minerva analytics
-minerva template list|show|apply
+minerva template list|show|apply|install|save
+minerva library export|import|lint
+minerva bridge show <profile>
 ```
 
 ### Evidence (fcheap tags)
@@ -138,6 +161,7 @@ minerva evidence docs
 minerva evidence save ./run-artifacts --kind eval --outcome pass \
   --tag skill:qa-tester --tag profile:code-reviewer --index
 minerva evidence search minerva-eval
+minerva evidence close <stash-id> --note "fixed"
 fcheap list --tag minerva --tag outcome:fail --json
 ```
 
