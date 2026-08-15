@@ -14,16 +14,43 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// KindWorkspace is a dump/default profile that may receive workspace skill suggestions.
+	KindWorkspace = "workspace"
+	// KindRole is a specialist profile (reviewer, architect). Suggest will not auto-add workspace skills here.
+	KindRole = "role"
+)
+
 // Profile represents an agent profile with its configuration.
 type Profile struct {
 	Name         string   `yaml:"name" json:"name"`
 	Description  string   `yaml:"description" json:"description"`
 	Model        string   `yaml:"model" json:"model"`
+	Kind         string   `yaml:"kind,omitempty" json:"kind,omitempty"`
 	Skills       []string `yaml:"skills" json:"skills"`
 	MCPServers   []string `yaml:"mcp_servers" json:"mcp_servers"`
 	SystemPrompt string   `yaml:"system_prompt" json:"system_prompt"`
 	UseCases     []string `yaml:"use_cases" json:"use_cases"`
 	Path         string   `yaml:"-" json:"path"`
+}
+
+// EffectiveKind returns an explicit kind or infers workspace vs role from the name.
+func (p Profile) EffectiveKind() string {
+	switch strings.ToLower(strings.TrimSpace(p.Kind)) {
+	case KindWorkspace, KindRole:
+		return strings.ToLower(strings.TrimSpace(p.Kind))
+	}
+	switch strings.ToLower(strings.TrimSpace(p.Name)) {
+	case "default", "dev", "workspace":
+		return KindWorkspace
+	default:
+		return KindRole
+	}
+}
+
+// IsWorkspace reports whether this profile may receive workspace-aware skill suggestions.
+func (p Profile) IsWorkspace() bool {
+	return p.EffectiveKind() == KindWorkspace
 }
 
 // LoadWarning is a non-fatal issue discovered while loading profiles.

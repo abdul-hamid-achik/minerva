@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	ManifestName    = "manifest.json"
-	BundleVersion   = 1
-	skillsRel       = "skills"
-	agentsRel       = "agents"
-	templatesRel    = "templates"
+	ManifestName  = "manifest.json"
+	BundleVersion = 1
+	skillsRel     = "skills"
+	agentsRel     = "agents"
+	templatesRel  = "templates"
 )
 
 // Manifest describes a library bundle.
@@ -47,9 +47,9 @@ type ExportOptions struct {
 
 // ExportResult summarizes an export.
 type ExportResult struct {
-	Path      string   `json:"path"`
-	Manifest  Manifest `json:"manifest"`
-	Format    string   `json:"format"` // tarball | directory
+	Path     string   `json:"path"`
+	Manifest Manifest `json:"manifest"`
+	Format   string   `json:"format"` // tarball | directory
 }
 
 // Export packs skills, profiles, and optional templates into dest.

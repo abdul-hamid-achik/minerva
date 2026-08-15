@@ -155,10 +155,18 @@ func renderMarkdown(p *profile.Profile, opts Options, s *Snippet) string {
 	fmt.Fprintf(&b, "```yaml\nservers:\n  minerva:\n    command: %s\n    args: [mcp, serve]\n    enabled: true\n```\n\n", opts.MinervaBinary)
 
 	fmt.Fprintf(&b, "## Honesty checklist\n\n")
-	fmt.Fprintf(&b, "1. Skills on the **profile** are durable for %s.\n", opts.Harness)
-	fmt.Fprintf(&b, "2. `minerva skill activate` is Minerva-local only — does not inject into a live session.\n")
-	fmt.Fprintf(&b, "3. Stack presence ≠ retrieval readiness — use `minerva status` or `stack deep`.\n")
-	fmt.Fprintf(&b, "4. Do not reimplement Cortex/MCPHub/Bob through Minerva.\n")
+	if strings.EqualFold(opts.Harness, "sonar") {
+		fmt.Fprintf(&b, "1. Profile skills load at `/agent`. Session one-shots use sonar `load_skill`.\n")
+		fmt.Fprintf(&b, "2. Prefer MCPHub pins: `minerva__learn`, `minerva__resolve_skill`, `minerva__status`, `minerva__suggest`.\n")
+		fmt.Fprintf(&b, "3. `minerva skill activate` is Minerva-local only — sonar does not read it.\n")
+		fmt.Fprintf(&b, "4. Stack presence ≠ retrieval readiness — use `minerva status`.\n")
+		fmt.Fprintf(&b, "5. Do not reimplement Cortex/MCPHub/Bob through Minerva.\n")
+	} else {
+		fmt.Fprintf(&b, "1. Skills on the **profile** are durable for %s.\n", opts.Harness)
+		fmt.Fprintf(&b, "2. `minerva skill activate` is Minerva-local only — does not inject into a live session.\n")
+		fmt.Fprintf(&b, "3. Stack presence ≠ retrieval readiness — use `minerva status` or `stack deep`.\n")
+		fmt.Fprintf(&b, "4. Do not reimplement Cortex/MCPHub/Bob through Minerva.\n")
+	}
 	return b.String()
 }
 
@@ -243,31 +251,18 @@ func listOrNone(items []string) string {
 
 func readOnlyTools() []string {
 	tools := []string{
-		"minerva_skill_list", "minerva_skill_show", "minerva_skill_compare",
-		"minerva_profile_list", "minerva_profile_show", "minerva_profile_compare",
-		"minerva_stack_check", "minerva_stack_deep", "minerva_status",
-		"minerva_suggest", "minerva_analytics",
-		"minerva_template_list", "minerva_template_show",
-		"minerva_evidence_docs", "minerva_evidence_search",
-		"minerva_library_lint",
-		"minerva_bridge_show",
+		"minerva_learn", "minerva_status", "minerva_suggest", "minerva_resolve_skill",
+		"minerva_skill", "minerva_profile", "minerva_library", "minerva_stack_check", "minerva_evidence",
 	}
 	sort.Strings(tools)
 	return tools
 }
 
 func effectfulTools() []string {
-	tools := []string{
-		"minerva_skill_create", "minerva_skill_update", "minerva_skill_activate",
-		"minerva_skill_deactivate", "minerva_skill_delete",
-		"minerva_profile_create", "minerva_profile_update_prompt", "minerva_profile_update_skills",
-		"minerva_profile_add_skills", "minerva_profile_remove_skills",
-		"minerva_profile_update_model", "minerva_profile_update_mcp", "minerva_profile_update_desc",
-		"minerva_profile_delete",
-		"minerva_template_apply",
-		"minerva_evidence_save", "minerva_evidence_close",
-		"minerva_library_export", "minerva_library_import",
+	// Mutations stay on the CLI so harnesses can approval-gate them.
+	return []string{
+		"CLI: minerva profile add-skills",
+		"CLI: minerva library export|import",
+		"CLI: minerva evidence save|close",
 	}
-	sort.Strings(tools)
-	return tools
 }

@@ -3,7 +3,23 @@ package evidence
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestIsFresh(t *testing.T) {
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	fresh := StashEntry{CreatedAt: now.Add(-24 * time.Hour).Format(time.RFC3339)}
+	stale := StashEntry{CreatedAt: now.Add(-30 * 24 * time.Hour).Format(time.RFC3339)}
+	if !IsFresh(fresh, now) {
+		t.Fatal("24h should be fresh")
+	}
+	if IsFresh(stale, now) {
+		t.Fatal("30d should be stale")
+	}
+	if !IsFresh(StashEntry{}, now) {
+		t.Fatal("missing timestamp is treated as fresh")
+	}
+}
 
 func TestStandardTags(t *testing.T) {
 	tags := StandardTags("eval", "pass", []string{"profile:dev", "minerva"})

@@ -17,29 +17,31 @@ import (
 	"github.com/abdul-hamid-achik/minerva/internal/bridge"
 	"github.com/abdul-hamid-achik/minerva/internal/evidence"
 	"github.com/abdul-hamid-achik/minerva/internal/integration"
+	"github.com/abdul-hamid-achik/minerva/internal/learn"
 	"github.com/abdul-hamid-achik/minerva/internal/library"
 	"github.com/abdul-hamid-achik/minerva/internal/monitor"
 	"github.com/abdul-hamid-achik/minerva/internal/profile"
 	"github.com/abdul-hamid-achik/minerva/internal/skill"
 	"github.com/abdul-hamid-achik/minerva/internal/status"
 	"github.com/abdul-hamid-achik/minerva/internal/suggest"
+	"github.com/abdul-hamid-achik/minerva/internal/surface"
 	"github.com/abdul-hamid-achik/minerva/internal/templates"
 	"github.com/abdul-hamid-achik/minerva/internal/textdiff"
 	"github.com/abdul-hamid-achik/minerva/internal/version"
 )
 
-const instructions = `Minerva is the agent library operator for ~/.agents (skills + profiles + templates)
-and a stack readiness orchestrator. It is NOT a second agent runtime.
+const instructions = `Minerva is the agent library operator for ~/.agents and a stack readiness orchestrator.
+It is NOT a second agent runtime.
 
-- Skill/profile CRUD writes the same disk layout local-agent loads.
-- minerva_skill_activate updates Minerva-local activation state only; it does NOT
-  inject skills into a live local-agent session. Prefer profile skill lists for
-  durable harness behavior.
-- minerva_stack_check = presence (correct binaries, tiered health).
-- minerva_stack_deep = bob/cortex/mcphub + readiness doctors/status.
-- minerva_suggest returns ranked actions; auto-apply is CLI-only for activate.
+Session-native surface (9 read-only tools): learn, status, suggest, resolve_skill,
+skill, profile, library, stack_check, evidence.
 
-Do not reimplement MCPHub gateway, Cortex tasks, or Bob apply through Minerva.`
+- minerva_learn first if you do not know the contract.
+- minerva_resolve_skill to pick a skill for the current task; then harness load_skill.
+- Durable membership is minerva profile add-skills on the CLI (approval-gated).
+- minerva skill activate does NOT inject into sonar/local-agent.
+
+Do not reimplement MCPHub, Cortex, or Bob through Minerva.`
 
 // Server wraps the go-sdk MCP server.
 type Server struct {
@@ -93,205 +95,29 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) register() {
-	// Skill management
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_skill_list", "List all available skills",
-		"Return all discovered skills with their name, description, active state, and path.",
-	), s.handleSkillList)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_skill_show", "Show a skill's full content",
-		"Return the complete markdown body of a skill by name.",
-	), s.handleSkillShow)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_skill_compare", "Compare two skills (unified diff)",
-		"Return a unified diff of two skill bodies. Set side_by_side=true for full bodies.",
-	), s.handleSkillCompare)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_skill_create",
-		Title:       "Create a new skill",
-		Description: "Create a new skill with a name, description, and markdown content. The skill is written to the skills directory.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Create a new skill", ReadOnlyHint: false},
-	}, s.handleSkillCreate)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_skill_update",
-		Title:       "Update an existing skill",
-		Description: "Update a skill's description and/or markdown body. Omit a field to leave it unchanged.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Update an existing skill", ReadOnlyHint: false},
-	}, s.handleSkillUpdate)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_skill_activate",
-		Title:       "Activate a skill (Minerva-local)",
-		Description: "Mark a skill active in Minerva's local state (~/.agents/.minerva-skills.json). Does not inject into a live local-agent session; use profile skills for durable harness loading.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Activate a skill (Minerva-local)", ReadOnlyHint: false},
-	}, s.handleSkillActivate)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_skill_deactivate",
-		Title:       "Deactivate a skill (Minerva-local)",
-		Description: "Clear Minerva-local activation for a skill. Does not change a live local-agent session.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Deactivate a skill (Minerva-local)", ReadOnlyHint: false},
-	}, s.handleSkillDeactivate)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_skill_delete",
-		Title:       "Delete a skill",
-		Description: "Permanently delete a skill and its directory.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Delete a skill", ReadOnlyHint: false},
-	}, s.handleSkillDelete)
-
-	// Profile management
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_profile_list", "List all agent profiles",
-		"Return all discovered agent profiles with their name, description, model, skills, and MCP server allowlists.",
-	), s.handleProfileList)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_profile_show", "Show a profile's full configuration",
-		"Return the complete configuration of an agent profile by name, including its system prompt.",
-	), s.handleProfileShow)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_profile_compare", "Compare two profiles (unified diff)",
-		"Return a unified YAML projection diff of two profiles. Set side_by_side=true for summary fields.",
-	), s.handleProfileCompare)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_create",
-		Title:       "Create a new agent profile",
-		Description: "Create a new agent profile with name, description, model, skills, MCP servers, and system prompt.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Create a new agent profile", ReadOnlyHint: false},
-	}, s.handleProfileCreate)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_update_prompt",
-		Title:       "Update a profile's system prompt",
-		Description: "Update the system prompt for an existing agent profile.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's system prompt", ReadOnlyHint: false},
-	}, s.handleProfileUpdatePrompt)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_update_skills",
-		Title:       "Replace a profile's skills",
-		Description: "Replace the full skills list for an existing agent profile.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Replace a profile's skills", ReadOnlyHint: false},
-	}, s.handleProfileUpdateSkills)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_add_skills",
-		Title:       "Add skills to a profile",
-		Description: "Merge skill names into a profile without dropping existing skills (durable local-agent SSOT).",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Add skills to a profile", ReadOnlyHint: false},
-	}, s.handleProfileAddSkills)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_remove_skills",
-		Title:       "Remove skills from a profile",
-		Description: "Remove skill names from a profile's skills list.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Remove skills from a profile", ReadOnlyHint: false},
-	}, s.handleProfileRemoveSkills)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_update_model",
-		Title:       "Update a profile's model",
-		Description: "Set the model field on an existing agent profile.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's model", ReadOnlyHint: false},
-	}, s.handleProfileUpdateModel)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_update_mcp",
-		Title:       "Update a profile's MCP allowlist",
-		Description: "Replace the mcp_servers allowlist for an existing agent profile.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's MCP allowlist", ReadOnlyHint: false},
-	}, s.handleProfileUpdateMCP)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_update_desc",
-		Title:       "Update a profile's description",
-		Description: "Set the description field on an existing agent profile.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Update a profile's description", ReadOnlyHint: false},
-	}, s.handleProfileUpdateDesc)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_profile_delete",
-		Title:       "Delete an agent profile",
-		Description: "Permanently delete an agent profile and its directory.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Delete an agent profile", ReadOnlyHint: false},
-	}, s.handleProfileDelete)
-
-	// Stack monitoring
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_stack_check", "Check stack presence (tiered)",
-		"Probe PATH for intelligence-stack tools using real binary names (glyph, cairn, tvault). Core missing → unhealthy; optional missing → degraded. Not domain readiness.",
-	), s.handleStackCheck)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_stack_deep", "Deep stack readiness probe",
-		"Compose bob check/context, cortex doctor, mcphub stats, and optional readiness probes (codemap/vecgrep/fcheap/tvault/monitor). Workspace defaults to cwd.",
-	), s.handleStackDeep)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_status", "Unified library + stack + evidence status",
-		"One operator report: library inventory, presence, deep readiness, open evidence fails, top next actions.",
-	), s.handleStatus)
-
-	// Analytics
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_analytics", "View usage analytics",
-		"Return Minerva-local usage analytics (skill activations, profile events). Not mcphub tool_calls.",
-	), s.handleAnalytics)
-
-	// Suggestions
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_suggest", "Get library and stack suggestions",
-		"Ranked suggestions from skills, profiles, stack presence/readiness, mcphub stats, analytics, and workspace type. Activation is Minerva-local only.",
-	), s.handleSuggest)
-
-	// Templates (local-agent trust lists already expect these names)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_template_list", "List system prompt templates",
-		"Return built-in role templates (name, description, role, recommended skills).",
-	), s.handleTemplateList)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_template_show", "Show a template",
-		"Return a template's full system prompt and recommended skills by name.",
-	), s.handleTemplateShow)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_template_apply",
-		Title:       "Apply a template to a profile",
-		Description: "Create or update an agent profile from a role template (builtin or disk; prompt + recommended skills).",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Apply a template to a profile", ReadOnlyHint: false},
-	}, s.handleTemplateApply)
-
-	// Library portable bundles
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_library_lint", "Lint the shared agents library",
-		"Check skills/profiles/templates for missing refs, empty prompts, orphans, and possible secrets.",
-	), s.handleLibraryLint)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_library_export",
-		Title:       "Export agents library bundle",
-		Description: "Export skills/profiles/templates to a directory or .tar.gz path.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Export agents library bundle", ReadOnlyHint: false},
-	}, s.handleLibraryExport)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_library_import",
-		Title:       "Import agents library bundle",
-		Description: "Import a directory or .tar.gz library bundle into the agents root.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Import agents library bundle", ReadOnlyHint: false},
-	}, s.handleLibraryImport)
-
-	// Bridge / local-agent integration
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_bridge_show", "local-agent bridge snippet for a profile",
-		"Generate launch + MCP trust documentation for a profile (md|shell|yaml).",
-	), s.handleBridgeShow)
-
-	// Evidence via fcheap conventions
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_evidence_docs", "Minerva fcheap tag conventions",
-		"Return the standard tag scheme for stashing Minerva eval/stack outcomes in fcheap.",
-	), s.handleEvidenceDocs)
-	sdkmcp.AddTool(s.srv, readOnlyTool(
-		"minerva_evidence_search", "Search Minerva evidence in fcheap",
-		"Search fcheap stashes (defaults to minerva-tagged query).",
-	), s.handleEvidenceSearch)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_evidence_save",
-		Title:       "Save evidence via fcheap",
-		Description: "Stash a file/directory with Minerva tags (minerva, minerva-eval, outcome:pass/fail, …) using fcheap. Does not store secrets.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Save evidence via fcheap", ReadOnlyHint: false},
-	}, s.handleEvidenceSave)
-	sdkmcp.AddTool(s.srv, &sdkmcp.Tool{
-		Name:        "minerva_evidence_close",
-		Title:       "Close a fail evidence stash",
-		Description: "Write a pass/closed receipt (closes:<id>) for a prior fail stash. Does not mutate the original stash.",
-		Annotations: &sdkmcp.ToolAnnotations{Title: "Close a fail evidence stash", ReadOnlyHint: false},
-	}, s.handleEvidenceClose)
+	for _, tool := range surface.ProductTools() {
+		spec := readOnlyTool(tool.Name, tool.Title, tool.Description)
+		switch tool.Name {
+		case "minerva_learn":
+			sdkmcp.AddTool(s.srv, spec, s.handleLearn)
+		case "minerva_status":
+			sdkmcp.AddTool(s.srv, spec, s.handleStatus)
+		case "minerva_suggest":
+			sdkmcp.AddTool(s.srv, spec, s.handleSuggest)
+		case "minerva_resolve_skill":
+			sdkmcp.AddTool(s.srv, spec, s.handleResolveSkill)
+		case "minerva_skill":
+			sdkmcp.AddTool(s.srv, spec, s.handleSkill)
+		case "minerva_profile":
+			sdkmcp.AddTool(s.srv, spec, s.handleProfile)
+		case "minerva_library":
+			sdkmcp.AddTool(s.srv, spec, s.handleLibrary)
+		case "minerva_stack_check":
+			sdkmcp.AddTool(s.srv, spec, s.handleStackCheck)
+		case "minerva_evidence":
+			sdkmcp.AddTool(s.srv, spec, s.handleEvidence)
+		}
+	}
 }
 
 func readOnlyTool(name, title, description string) *sdkmcp.Tool {
@@ -657,7 +483,7 @@ func (s *Server) handleStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, in
 			ws = "."
 		}
 	}
-	deep := true
+	deep := false
 	if in.Deep != nil {
 		deep = *in.Deep
 	}
@@ -942,6 +768,109 @@ func (s *Server) handleEvidenceClose(ctx context.Context, _ *sdkmcp.CallToolRequ
 	}
 	_ = s.analyticsStore.Record("evidence_close", res.ClosedID, res.ReceiptID)
 	return textResult(res), res, nil
+}
+
+type LearnInput struct {
+	Workspace string `json:"workspace,omitempty"`
+}
+
+func (s *Server) handleLearn(ctx context.Context, _ *sdkmcp.CallToolRequest, in LearnInput) (*sdkmcp.CallToolResult, any, error) {
+	_ = s.skillManager.LoadAll()
+	_ = s.profileManager.LoadAll()
+	ws := in.Workspace
+	if ws == "" {
+		ws, _ = os.Getwd()
+		if ws == "" {
+			ws = "."
+		}
+	}
+	brief := learn.Build(s.skillManager, s.profileManager, ws)
+	return textResult(brief), brief, nil
+}
+
+type ResolveSkillInput struct {
+	Query     string `json:"query" jsonschema:"required, natural-language task intent"`
+	Workspace string `json:"workspace,omitempty"`
+}
+
+func (s *Server) handleResolveSkill(ctx context.Context, _ *sdkmcp.CallToolRequest, in ResolveSkillInput) (*sdkmcp.CallToolResult, any, error) {
+	_ = s.skillManager.LoadAll()
+	_ = s.profileManager.LoadAll()
+	res := skill.Resolve(in.Query, s.skillManager.All(), s.profileManager.All())
+	return textResult(res), res, nil
+}
+
+type SkillActionInput struct {
+	Action     string `json:"action,omitempty" jsonschema:"list, show, or compare; default list"`
+	Name       string `json:"name,omitempty"`
+	NameA      string `json:"name_a,omitempty"`
+	NameB      string `json:"name_b,omitempty"`
+	SideBySide bool   `json:"side_by_side,omitempty"`
+}
+
+func (s *Server) handleSkill(ctx context.Context, req *sdkmcp.CallToolRequest, in SkillActionInput) (*sdkmcp.CallToolResult, any, error) {
+	_ = s.skillManager.LoadAll()
+	switch strings.ToLower(strings.TrimSpace(in.Action)) {
+	case "", "list":
+		return s.handleSkillList(ctx, req, struct{}{})
+	case "show":
+		return s.handleSkillShow(ctx, req, SkillNameInput{Name: in.Name})
+	case "compare":
+		return s.handleSkillCompare(ctx, req, SkillCompareInput{NameA: in.NameA, NameB: in.NameB, SideBySide: in.SideBySide})
+	default:
+		return errorResult("action must be list, show, or compare"), nil, nil
+	}
+}
+
+type ProfileActionInput struct {
+	Action     string `json:"action,omitempty" jsonschema:"list, show, or compare; default list"`
+	Name       string `json:"name,omitempty"`
+	NameA      string `json:"name_a,omitempty"`
+	NameB      string `json:"name_b,omitempty"`
+	SideBySide bool   `json:"side_by_side,omitempty"`
+}
+
+func (s *Server) handleProfile(ctx context.Context, req *sdkmcp.CallToolRequest, in ProfileActionInput) (*sdkmcp.CallToolResult, any, error) {
+	_ = s.profileManager.LoadAll()
+	switch strings.ToLower(strings.TrimSpace(in.Action)) {
+	case "", "list":
+		return s.handleProfileList(ctx, req, struct{}{})
+	case "show":
+		return s.handleProfileShow(ctx, req, ProfileNameInput{Name: in.Name})
+	case "compare":
+		return s.handleProfileCompare(ctx, req, ProfileCompareInput{NameA: in.NameA, NameB: in.NameB, SideBySide: in.SideBySide})
+	default:
+		return errorResult("action must be list, show, or compare"), nil, nil
+	}
+}
+
+type LibraryActionInput struct {
+	Action string `json:"action,omitempty" jsonschema:"lint; default lint"`
+}
+
+func (s *Server) handleLibrary(ctx context.Context, req *sdkmcp.CallToolRequest, in LibraryActionInput) (*sdkmcp.CallToolResult, any, error) {
+	switch strings.ToLower(strings.TrimSpace(in.Action)) {
+	case "", "lint":
+		return s.handleLibraryLint(ctx, req, struct{}{})
+	default:
+		return errorResult("action must be lint (export/import are CLI-only)"), nil, nil
+	}
+}
+
+type EvidenceActionInput struct {
+	Action string `json:"action,omitempty" jsonschema:"docs or search; default docs"`
+	Query  string `json:"query,omitempty"`
+}
+
+func (s *Server) handleEvidence(ctx context.Context, req *sdkmcp.CallToolRequest, in EvidenceActionInput) (*sdkmcp.CallToolResult, any, error) {
+	switch strings.ToLower(strings.TrimSpace(in.Action)) {
+	case "", "docs":
+		return s.handleEvidenceDocs(ctx, req, struct{}{})
+	case "search":
+		return s.handleEvidenceSearch(ctx, req, EvidenceSearchInput{Query: in.Query})
+	default:
+		return errorResult("action must be docs or search (save/close are CLI-only)"), nil, nil
+	}
 }
 
 // --- Helpers ---

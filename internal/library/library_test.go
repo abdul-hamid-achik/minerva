@@ -3,6 +3,7 @@ package library
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/abdul-hamid-achik/minerva/internal/profile"
@@ -122,5 +123,34 @@ func TestLint_MissingSkillAndSecret(t *testing.T) {
 	}
 	if !foundSecret {
 		t.Fatal("expected secret issue")
+	}
+}
+
+func TestLint_LongDescriptionIsWarning(t *testing.T) {
+	dir := t.TempDir()
+	sm := skill.NewManagerWithState(dir, filepath.Join(dir, "skills"))
+	long := strings.Repeat("Use when reviewing payments and marketplaces. ", 50)
+	if err := sm.Create(filepath.Join(dir, "skills"), "stripe-ish", long, "body"); err != nil {
+		t.Fatal(err)
+	}
+	pm := profile.NewManager(dir)
+	if err := pm.Create(&profile.Profile{Name: "dev", SystemPrompt: "hi", Skills: []string{"stripe-ish"}}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Lint(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warn bool
+	for _, i := range rep.Issues {
+		if i.Kind == "skill-description" && i.Severity == SeverityError {
+			t.Fatalf("long description should not be an error: %+v", i)
+		}
+		if i.Kind == "skill-description" && i.Severity == SeverityWarning {
+			warn = true
+		}
+	}
+	if !warn {
+		t.Fatalf("expected warning, issues=%+v", rep.Issues)
 	}
 }

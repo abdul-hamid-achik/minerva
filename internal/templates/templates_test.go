@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+func TestBuiltinCodeReviewer_NoMissingSkills(t *testing.T) {
+	var found *Template
+	all := Builtins()
+	for i := range all {
+		if all[i].Name == "code-reviewer" {
+			found = &all[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("missing code-reviewer")
+	}
+	for _, sk := range found.Skills {
+		if sk == "go-review" {
+			t.Fatal("code-reviewer must not reference go-review")
+		}
+	}
+}
+
 func TestCatalog_DiskOverridesBuiltin(t *testing.T) {
 	dir := t.TempDir()
 	custom := Template{

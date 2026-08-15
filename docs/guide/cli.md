@@ -100,6 +100,10 @@ Binary map (product → PATH):
 ## Suggest & analytics
 
 ```bash
+minerva learn
+minerva learn --json
+minerva skill resolve "review this pull request"
+minerva skill resolve "review this pull request" --json
 minerva suggest
 minerva suggest --json
 minerva suggest --apply              # allowlisted profile add-skills only

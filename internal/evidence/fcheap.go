@@ -171,6 +171,27 @@ func SearchMinerva(ctx context.Context, query string) (string, error) {
 	return string(out), nil
 }
 
+// FreshWindow is how long an open fail stays HIGH in suggest.
+const FreshWindow = 14 * 24 * time.Hour
+
+// IsFresh reports whether the stash is recent enough to nag about.
+func IsFresh(e StashEntry, now time.Time) bool {
+	if e.CreatedAt == "" {
+		return true
+	}
+	parsed, err := time.Parse(time.RFC3339, e.CreatedAt)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339Nano, e.CreatedAt)
+	}
+	if err != nil {
+		return true
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.Sub(parsed) <= FreshWindow
+}
+
 // StashEntry is a minimal fcheap list row.
 type StashEntry struct {
 	ID        string   `json:"id"`

@@ -1,0 +1,57 @@
+version: 1
+name: minerva_learn_and_resolve
+intent: |
+    agents can run minerva learn --json and skill resolve --json in an
+    isolated agents root and get a stable contract plus ranked hits.
+target:
+    cmd: ["./bin/minerva", "learn"]
+    cwd: "."
+    env:
+        MINERVA_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/learn-agents"
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: |
+            set -e
+            go build -o ./bin/minerva ./cmd/minerva
+            ROOT="$PWD/.glyphrun/tmp/learn-agents"
+            rm -rf "$ROOT"
+            export MINERVA_AGENTS_DIR="$ROOT"
+            ./bin/minerva init
+            ./bin/minerva skill create qa-tester "body" -d "Use when writing test plans"
+            ./bin/minerva skill create doc-writer "body" -d "Use when writing READMEs and documentation"
+            ./bin/minerva profile create dev "you are dev" --kind workspace -s qa-tester
+          cwd: "."
+          timeoutMs: 90000
+steps:
+    - wait:
+        screen:
+            contains: "not a second agent runtime"
+        timeoutMs: 15000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: learn_json_has_thesis
+      description: learn --json includes thesis and tools
+      verify:
+        command:
+            run: |
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/learn-agents" ./bin/minerva learn --json | grep -q '"thesis"'
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/learn-agents" ./bin/minerva learn --json | grep -q 'minerva_resolve_skill'
+    - id: resolve_ranks_docs
+      description: skill resolve finds doc-writer for documentation intent
+      verify:
+        command:
+            run: |
+                MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/learn-agents" ./bin/minerva skill resolve "write the readme documentation" --json | grep -q 'doc-writer'
+    - id: exits_zero
+      description: learn exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:395dc500c36096e62908bd32b5c0a1f12b0aa59aaabd166469fa49b147ac108e

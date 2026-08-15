@@ -30,7 +30,9 @@
 | local-agent profile apply | Activates profile skills **in session** |
 | local-agent `load_skill` | One-shot body, does not flip Active |
 
-For durable behavior: **put skills on a profile**, then start local-agent with that profile.
+For durable behavior: **put skills on a profile**, then start the harness (sonar or local-agent) with that profile.
+
+Profiles may set `kind: workspace` or `kind: role`. Names `default`, `dev`, and `workspace` infer workspace. Role profiles do not receive workspace skill suggestions.
 
 ## Suggest philosophy
 

@@ -24,7 +24,9 @@ import (
 const (
 	MaxSkillBodyBytes        = 1 << 20 // 1 MiB
 	MaxSkillNameBytes        = 128
-	MaxSkillDescriptionBytes = 512
+	MaxSkillDescriptionBytes = 4096
+	// LintDescriptionWarnBytes is when a long Agent Skills "Use when" blurb is noisy, not invalid.
+	LintDescriptionWarnBytes = 2048
 	stateFileName            = ".minerva-skills.json"
 )
 

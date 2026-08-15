@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestEffectiveKind(t *testing.T) {
+	if (Profile{Name: "dev"}).EffectiveKind() != KindWorkspace {
+		t.Fatal("dev should infer workspace")
+	}
+	if (Profile{Name: "code-reviewer"}).EffectiveKind() != KindRole {
+		t.Fatal("code-reviewer should infer role")
+	}
+	if (Profile{Name: "dev", Kind: KindRole}).EffectiveKind() != KindRole {
+		t.Fatal("explicit kind wins")
+	}
+}
+
 func TestAddSkills_Merges(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)

@@ -31,7 +31,7 @@ outcomes:
         screen:
             contains: "Available Commands:"
     - id: core_commands_documented
-      description: help lists skill, profile, stack, status, library, bridge, suggest, evidence, mcp, template
+      description: help lists skill, profile, stack, status, library, bridge, suggest, learn, evidence, mcp, template
       verify:
         command:
             run: |
@@ -43,6 +43,7 @@ outcomes:
                 printf '%s\n' "$output" | grep -qE -- 'library'
                 printf '%s\n' "$output" | grep -qE -- 'bridge'
                 printf '%s\n' "$output" | grep -qE -- 'suggest'
+                printf '%s\n' "$output" | grep -qE -- 'learn'
                 printf '%s\n' "$output" | grep -qE -- 'evidence'
                 printf '%s\n' "$output" | grep -qE -- 'mcp'
                 printf '%s\n' "$output" | grep -qE -- 'template'
@@ -51,4 +52,4 @@ outcomes:
       verify:
         process:
             exitCode: 0
-contractHash: sha256:87bfcf937bb6e57048dfc29b93159861aa02c5cff1e640b53cef68b99cf64aa1
+contractHash: sha256:344d39571159305aea3a04af67ce9f48396d404e3bfdf1424e0dc01811dad6ae

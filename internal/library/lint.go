@@ -67,7 +67,9 @@ func Lint(agentsDir string) (*LintReport, error) {
 			rep.add(SeverityWarning, "skill-description", s.Name, "missing description (poor catalog discovery)")
 		}
 		if len(s.Description) > skill.MaxSkillDescriptionBytes {
-			rep.add(SeverityError, "skill-description", s.Name, "description exceeds size limit")
+			rep.add(SeverityError, "skill-description", s.Name, "description exceeds write limit")
+		} else if len(s.Description) > skill.LintDescriptionWarnBytes {
+			rep.add(SeverityWarning, "skill-description", s.Name, "description is long; fine for harness discovery, consider tightening")
 		}
 		if strings.TrimSpace(s.Content) == "" {
 			rep.add(SeverityWarning, "skill-body", s.Name, "empty body")
@@ -241,5 +243,3 @@ func FormatHuman(r *LintReport) string {
 	}
 	return b.String()
 }
-
-

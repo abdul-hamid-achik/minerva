@@ -4,53 +4,55 @@
 minerva mcp serve
 ```
 
-Exposes library, stack, templates, evidence, and suggest tools over **stdio** for MCPHub / local-agent.
+Exposes a **compact, read-only** session surface over stdio for MCPHub / sonar / local-agent. Mutations stay on the CLI so harnesses can approval-gate them.
 
-## Representative tools
+## Product tools (9)
 
-| Tool | Class |
-|------|--------|
-| `minerva_skill_list` / `show` / `compare` | read-only |
-| `minerva_profile_list` / `show` | read-only |
-| `minerva_stack_check` | read-only |
-| `minerva_stack_deep` | read-only (`stash` optional) |
-| `minerva_status` | read-only (unified doctor) |
-| `minerva_suggest` | read-only |
-| `minerva_analytics` | read-only |
-| `minerva_template_list` / `show` | read-only |
-| `minerva_library_lint` | read-only |
-| `minerva_bridge_show` | read-only |
-| `minerva_evidence_docs` / `search` | read-only |
-| `minerva_skill_create` / `update` / `activate` / … | effectful |
-| `minerva_template_apply` | effectful |
-| `minerva_library_export` / `import` | effectful |
-| `minerva_evidence_save` / `close` | effectful |
-| `minerva_profile_*` mutations (`add_skills`, `update_model`, `update_mcp`, …) | effectful |
+| Tool | Use when |
+|------|----------|
+| `minerva_learn` | First time / how Minerva works |
+| `minerva_status` | Unified doctor / is the stack ready? |
+| `minerva_suggest` | Ranked next library/stack actions |
+| `minerva_resolve_skill` | Which skill should I load for *this* task? |
+| `minerva_skill` | `action=list\|show\|compare` |
+| `minerva_profile` | `action=list\|show\|compare` |
+| `minerva_library` | `action=lint` |
+| `minerva_stack_check` | PATH presence only |
+| `minerva_evidence` | `action=docs\|search` |
+
+There are no MCP aliases for the old 36 CRUD names. Create, activate, delete, add-skills, export/import, and evidence save/close are CLI-only.
 
 ## MCPHub
 
 ```yaml
 servers:
   minerva:
-    command: /path/to/minerva
+    command: minerva
     args: [mcp, serve]
     enabled: true
     tags: [agent, skills, profiles]
+    use_when:
+      - Resolve which skill to load for the current task
+      - Check agent-library or stack readiness
+      - Get a Minerva onboarding brief
+pin:
+  - minerva__learn
+  - minerva__resolve_skill
+  - minerva__status
+  - minerva__suggest
 ```
 
-## Trust rules (local-agent)
+## Trust (sonar / local-agent)
 
-- **Exact routes only** — no `minerva_*` wildcards  
-- Enumerate live tools via introspection  
-- Read-only in AUTO when possible  
-- Mutations approval-gated  
-- `minerva_skill_activate` does **not** inject into a live session  
+Exact routes only. All nine product tools are read-only:
+
+`minerva__learn`, `minerva__status`, `minerva__suggest`, `minerva__resolve_skill`, `minerva__skill`, `minerva__profile`, `minerva__library`, `minerva__stack_check`, `minerva__evidence`
+
+`minerva skill activate` does **not** inject into a live sonar or local-agent session.
 
 ## Lazy mode
 
-Under MCPHub `expose: lazy`, discover via:
-
 ```text
-mcphub_resolve_tool → minerva__…
+mcphub_resolve_tool → minerva__resolve_skill | minerva__learn | minerva__status
 mcphub_call_tool
 ```

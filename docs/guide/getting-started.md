@@ -69,9 +69,12 @@ minerva status                # library + presence + deep + next actions
 minerva stack check          # presence only, tiered
 minerva stack deep           # readiness + cortex + mcphub
 minerva stack deep --stash   # save report to fcheap
+minerva learn                # one-page contract for agents
+minerva skill resolve "review this PR"
 minerva suggest              # ranked next actions (prefer profile membership)
 minerva library lint
 minerva bridge show <profile>
+minerva bridge show <profile> --harness sonar
 ```
 
 `status` is the default operator loop. The fast stack check answers “what is present?” The deep check asks each owning tool whether its domain is actually ready. Read [Stack readiness](/guide/stack) and [CLI](/guide/cli) for exit-code gates (`--require-retrieval`, `--strict`).

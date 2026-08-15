@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/abdul-hamid-achik/minerva/internal/analytics"
 	"github.com/abdul-hamid-achik/minerva/internal/evidence"
@@ -185,13 +186,6 @@ func (e *Engine) skillGapSuggestions() []Suggestion {
 	var suggestions []Suggestion
 
 	allSkills := e.skillMgr.All()
-	inactiveCount := 0
-	for _, s := range allSkills {
-		if !s.Active {
-			inactiveCount++
-		}
-	}
-
 	for _, s := range allSkills {
 		if s.Description == "" {
 			suggestions = append(suggestions, sug(2, "skill",
@@ -199,12 +193,6 @@ func (e *Engine) skillGapSuggestions() []Suggestion {
 				fmt.Sprintf("minerva skill update %s -d \"...\"", s.Name),
 				false, "library", "skill:"+s.Name))
 		}
-	}
-
-	if inactiveCount > 10 {
-		suggestions = append(suggestions, sug(3, "skill",
-			fmt.Sprintf("%d skills are inactive in Minerva's local activation set — review with minerva skill list", inactiveCount),
-			"minerva skill list", false, "library"))
 	}
 
 	if e.analytics != nil {
@@ -464,7 +452,11 @@ func (e *Engine) evidenceFailSuggestions() []Suggestion {
 	skillFails := map[string]int{}
 	profileFails := map[string]int{}
 	untagged := 0
+	now := time.Now()
 	for _, f := range fails {
+		if !evidence.IsFresh(f, now) {
+			continue
+		}
 		if len(f.Skills) == 0 && len(f.Profiles) == 0 {
 			untagged++
 		}
@@ -502,9 +494,23 @@ func (e *Engine) evidenceFailSuggestions() []Suggestion {
 	if firstID != "" {
 		closeHint = fmt.Sprintf("minerva evidence close %s", firstID)
 	}
-	suggestions = append(suggestions, sug(2, "evidence",
-		fmt.Sprintf("%d open fcheap outcome:fail stashes (minerva) — review or close resolved ones", len(fails)),
-		closeHint, false, "evidence"))
+	fresh, stale := 0, 0
+	for _, f := range fails {
+		if evidence.IsFresh(f, time.Now()) {
+			fresh++
+		} else {
+			stale++
+		}
+	}
+	if fresh > 0 {
+		suggestions = append(suggestions, sug(2, "evidence",
+			fmt.Sprintf("%d open fcheap outcome:fail stashes (minerva) — review or close resolved ones", fresh),
+			closeHint, false, "evidence"))
+	} else if stale > 0 {
+		suggestions = append(suggestions, sug(4, "evidence",
+			fmt.Sprintf("%d stale open fail stashes older than %s — close or ignore", stale, evidence.FreshWindow),
+			closeHint, false, "evidence"))
+	}
 
 	for _, c := range topN(skillFails, 5) {
 		action := fmt.Sprintf("minerva skill show %s", c.name)
@@ -630,7 +636,7 @@ func (e *Engine) workspaceAwareSuggestions() []Suggestion {
 		if !e.skillMgr.Has(skillName) {
 			continue
 		}
-		if e.skillInAnyProfile(skillName) {
+		if e.skillInWorkspaceProfile(skillName) {
 			continue
 		}
 		action, auto := e.profileAddSkillAction(skillName)
@@ -638,7 +644,7 @@ func (e *Engine) workspaceAwareSuggestions() []Suggestion {
 			continue
 		}
 		suggestions = append(suggestions, sug(2, "profile",
-			fmt.Sprintf("Workspace looks like %s — add skill %q to a profile for durable local-agent loading", projectType, skillName),
+			fmt.Sprintf("Workspace looks like %s — add skill %q to a workspace profile for durable harness loading", projectType, skillName),
 			action, auto, "workspace:"+projectType, "skill:"+skillName))
 	}
 
@@ -660,26 +666,55 @@ func (e *Engine) skillInAnyProfile(skillName string) bool {
 	return false
 }
 
+func (e *Engine) skillInWorkspaceProfile(skillName string) bool {
+	if e.profileMgr == nil {
+		return false
+	}
+	for _, p := range e.profileMgr.All() {
+		if !p.IsWorkspace() {
+			continue
+		}
+		for _, s := range p.Skills {
+			if s == skillName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func workspaceProfiles(profiles []*profile.Profile) []*profile.Profile {
+	var out []*profile.Profile
+	for _, p := range profiles {
+		if p != nil && p.IsWorkspace() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // profileAddSkillAction returns a durable profile action for skillName.
-// AutoApply is true only when exactly one profile exists (unambiguous).
+// AutoApply is true only when exactly one workspace profile exists.
 func (e *Engine) profileAddSkillAction(skillName string) (action string, autoApply bool) {
 	if e.profileMgr == nil {
 		return "", false
 	}
-	profiles := e.profileMgr.All()
-	switch len(profiles) {
+	ws := workspaceProfiles(e.profileMgr.All())
+	switch len(ws) {
 	case 0:
-		return fmt.Sprintf("minerva profile create default -s %s", skillName), false
+		return fmt.Sprintf("minerva profile create default --kind workspace -s %s", skillName), false
 	case 1:
-		return fmt.Sprintf("minerva profile add-skills %s %s", profiles[0].Name, skillName), true
+		return fmt.Sprintf("minerva profile add-skills %s %s", ws[0].Name, skillName), true
 	default:
-		// Prefer a profile named after common defaults, else first alphabetically.
-		for _, preferred := range []string{"default", "dev", "code-reviewer"} {
+		for _, preferred := range []string{"default", "dev", "workspace"} {
 			if e.profileMgr.Has(preferred) {
-				return fmt.Sprintf("minerva profile add-skills %s %s", preferred, skillName), false
+				p := e.profileMgr.Get(preferred)
+				if p != nil && p.IsWorkspace() {
+					return fmt.Sprintf("minerva profile add-skills %s %s", preferred, skillName), false
+				}
 			}
 		}
-		return fmt.Sprintf("minerva profile add-skills %s %s", profiles[0].Name, skillName), false
+		return fmt.Sprintf("minerva profile add-skills %s %s", ws[0].Name, skillName), false
 	}
 }
 

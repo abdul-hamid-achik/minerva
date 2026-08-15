@@ -100,6 +100,7 @@ tasks:
         ./specs/library_and_profile.yml
         ./specs/status_and_bridge.yml
         ./specs/skill_update_compare.yml
+        ./specs/learn_and_resolve.yml
         --format md
 
   docs:dev:

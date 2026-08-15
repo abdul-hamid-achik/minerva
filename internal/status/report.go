@@ -18,41 +18,41 @@ import (
 
 // Options controls which probes run.
 type Options struct {
-	Workspace        string
-	Deep             bool // run stack deep readiness probes
-	IncludeEvidence  bool // count open fail stashes (needs fcheap)
-	IncludeSuggest   bool // attach top next actions
-	MaxNextActions   int  // default 5
+	Workspace       string
+	Deep            bool // run stack deep readiness probes
+	IncludeEvidence bool // count open fail stashes (needs fcheap)
+	IncludeSuggest  bool // attach top next actions
+	MaxNextActions  int  // default 5
 }
 
 // LibraryStatus summarizes the shared ~/.agents library.
 type LibraryStatus struct {
-	Skills            int                    `json:"skills"`
-	Profiles          int                    `json:"profiles"`
-	ActiveSkills      int                    `json:"active_skills"`
-	ProfileWarnings   []profile.LoadWarning  `json:"profile_warnings,omitempty"`
-	MissingSkillRefs  int                    `json:"missing_skill_refs"`
-	EmptyPromptCount  int                    `json:"empty_prompt_count"`
+	Skills           int                   `json:"skills"`
+	Profiles         int                   `json:"profiles"`
+	ActiveSkills     int                   `json:"active_skills"`
+	ProfileWarnings  []profile.LoadWarning `json:"profile_warnings,omitempty"`
+	MissingSkillRefs int                   `json:"missing_skill_refs"`
+	EmptyPromptCount int                   `json:"empty_prompt_count"`
 }
 
 // EvidenceStatus summarizes open Minerva fail evidence.
 type EvidenceStatus struct {
-	Available   bool   `json:"available"`
-	OpenFails   int    `json:"open_fails"`
-	Error       string `json:"error,omitempty"`
-	Note        string `json:"note,omitempty"`
+	Available bool   `json:"available"`
+	OpenFails int    `json:"open_fails"`
+	Error     string `json:"error,omitempty"`
+	Note      string `json:"note,omitempty"`
 }
 
 // Report is the unified doctor/status payload.
 type Report struct {
-	GeneratedAt string                      `json:"generated_at"`
-	Workspace   string                      `json:"workspace"`
-	Library     LibraryStatus               `json:"library"`
-	Presence    monitor.StackStatus         `json:"presence"`
+	GeneratedAt string                       `json:"generated_at"`
+	Workspace   string                       `json:"workspace"`
+	Library     LibraryStatus                `json:"library"`
+	Presence    monitor.StackStatus          `json:"presence"`
 	Deep        *integration.DeepStackStatus `json:"deep,omitempty"`
-	Evidence    EvidenceStatus              `json:"evidence"`
-	Next        []suggest.Suggestion        `json:"next,omitempty"`
-	Summary     string                      `json:"summary"`
+	Evidence    EvidenceStatus               `json:"evidence"`
+	Next        []suggest.Suggestion         `json:"next,omitempty"`
+	Summary     string                       `json:"summary"`
 	// Verdict is a short traffic-light: healthy | degraded | unhealthy
 	Verdict string `json:"verdict"`
 }

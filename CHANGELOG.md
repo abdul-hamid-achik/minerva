@@ -5,6 +5,27 @@ All notable changes to Minerva are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Session-native MCP surface so harnesses (sonar, MCPHub lazy) can call Minerva
+the way they call Bob.
+
+### Added
+
+- `minerva learn` / `minerva_learn` — one-page contract brief
+- `minerva skill resolve` / `minerva_resolve_skill` — rank skills for an intent
+- Profile `kind: workspace|role` (`--kind`); workspace-only skill suggestions
+- `minerva bridge show --harness sonar`
+- Compact MCP catalog: exactly 9 read-only tools
+
+### Changed
+
+- MCP no longer advertises the 36 CRUD tools; mutations stay on the CLI
+- Library lint: long skill descriptions are not errors (Agent Skills "Use when")
+- Suggest does not nag Minerva-local activation or dump skills onto role profiles
+- Suggest decays evidence fails older than 14 days
+- Builtin `code-reviewer` template no longer references missing `go-review`
+
 ## [0.2.0] - 2026-07-19
 
 Operator control plane release: durable library management, honest readiness gates,

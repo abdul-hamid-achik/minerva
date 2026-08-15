@@ -19,8 +19,8 @@ func TestRender_Markdown(t *testing.T) {
 	if !strings.Contains(snip.Body, "profile \"dev\"") {
 		t.Fatalf("body:\n%s", snip.Body)
 	}
-	if !strings.Contains(snip.Body, "minerva_status") {
-		t.Fatal("expected trust tool list")
+	if !strings.Contains(snip.Body, "minerva_status") || !strings.Contains(snip.Body, "minerva_resolve_skill") {
+		t.Fatal("expected compact trust tool list")
 	}
 	if !strings.Contains(snip.Body, "mcp, serve") && !strings.Contains(snip.Body, "args: [mcp") {
 		t.Fatal("expected mcphub entry")
@@ -42,5 +42,19 @@ func TestRender_ShellAndYAML(t *testing.T) {
 	}
 	if !strings.Contains(y.Body, "profile:") || !strings.Contains(y.Body, "trust:") {
 		t.Fatal(y.Body)
+	}
+}
+
+func TestRender_SonarHarness(t *testing.T) {
+	p := &profile.Profile{Name: "dev", Skills: []string{"a"}, SystemPrompt: "x"}
+	snip, err := Render(p, Options{AgentsDir: "~/.agents", Harness: "sonar"}, FormatMarkdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(snip.Body, "load_skill") {
+		t.Fatal(snip.Body)
+	}
+	if !strings.Contains(snip.Body, "minerva__resolve_skill") {
+		t.Fatal(snip.Body)
 	}
 }

@@ -33,7 +33,7 @@ func Builtins() []Template {
 			Name:        "code-reviewer",
 			Description: "Thorough code reviewer focused on correctness, security, and maintainability",
 			Role:        "reviewer",
-			Skills:      []string{"go-review", "software-architect", "qa-tester"},
+			Skills:      []string{"software-architect", "qa-tester", "differential-review"},
 			Prompt: `You are a thorough code reviewer. Your job is to find issues before they reach production.
 
 ## Review Priorities

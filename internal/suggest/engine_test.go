@@ -154,6 +154,28 @@ func TestEngine_WorkspaceSuggestsProfileAdd(t *testing.T) {
 	}
 }
 
+func TestEngine_DoesNotDumpWorkspaceSkillsOnRoleProfile(t *testing.T) {
+	dir := t.TempDir()
+	if err := osWrite(filepath.Join(dir, "go.mod"), "module example\n"); err != nil {
+		t.Fatal(err)
+	}
+	skillsDir := filepath.Join(dir, "skills")
+	sm := skill.NewManagerWithState(dir, skillsDir)
+	if err := sm.Create(skillsDir, "doc-writer", "docs", "body"); err != nil {
+		t.Fatal(err)
+	}
+	pm := profile.NewManager(dir)
+	if err := pm.Create(&profile.Profile{Name: "code-reviewer", SystemPrompt: "review", Kind: profile.KindRole}); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(sm, pm, analytics.NewStore(dir), dir)
+	for _, s := range engine.Analyze() {
+		if strings.Contains(s.Action, "add-skills code-reviewer") {
+			t.Fatalf("must not add workspace skills to role profile: %#v", s)
+		}
+	}
+}
+
 func osWrite(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }

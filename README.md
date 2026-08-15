@@ -145,6 +145,8 @@ Core missing → unhealthy. Optional missing → degraded only.
 ### Suggest / analytics / templates
 
 ```bash
+minerva learn
+minerva skill resolve "review this PR"
 minerva suggest
 minerva suggest --json
 minerva suggest --apply          # allowlisted profile add-skills actions
@@ -177,7 +179,7 @@ Attribution: `skill:<name>`, `profile:<name>` — `minerva suggest` reads failed
 minerva mcp serve
 ```
 
-Tools include skill/profile CRUD, `minerva_stack_check`, `minerva_stack_deep`, `minerva_analytics`, `minerva_suggest`.
+Nine read-only tools: `minerva_learn`, `minerva_status`, `minerva_suggest`, `minerva_resolve_skill`, `minerva_skill`, `minerva_profile`, `minerva_library`, `minerva_stack_check`, `minerva_evidence`. Mutations stay on the CLI.
 
 Wire via MCPHub:
 

@@ -18,6 +18,7 @@ import (
 	"github.com/abdul-hamid-achik/minerva/internal/bridge"
 	"github.com/abdul-hamid-achik/minerva/internal/evidence"
 	"github.com/abdul-hamid-achik/minerva/internal/integration"
+	"github.com/abdul-hamid-achik/minerva/internal/learn"
 	"github.com/abdul-hamid-achik/minerva/internal/library"
 	minervamcp "github.com/abdul-hamid-achik/minerva/internal/mcp"
 	"github.com/abdul-hamid-achik/minerva/internal/monitor"
@@ -56,6 +57,7 @@ disk into its own session — it does not read .minerva-skills.json.`,
 		newStatusCmd(),
 		newAnalyticsCmd(),
 		newSuggestCmd(),
+		newLearnCmd(),
 		newTemplateCmd(),
 		newLibraryCmd(),
 		newBridgeCmd(),
@@ -82,6 +84,7 @@ func newSkillCmd() *cobra.Command {
 		newSkillActivateCmd(),
 		newSkillDeactivateCmd(),
 		newSkillDeleteCmd(),
+		newSkillResolveCmd(),
 	)
 	return cmd
 }
@@ -471,7 +474,7 @@ func newProfileCompareCmd() *cobra.Command {
 }
 
 func newProfileCreateCmd() *cobra.Command {
-	var description, model string
+	var description, model, kind string
 	var skills, mcpServers []string
 	cmd := &cobra.Command{
 		Use:   "create <name> [system-prompt]",
@@ -486,10 +489,14 @@ func newProfileCreateCmd() *cobra.Command {
 			if len(args) == 2 {
 				prompt = args[1]
 			}
+			if kind != "" && kind != profile.KindWorkspace && kind != profile.KindRole {
+				return fmt.Errorf("kind must be %q or %q", profile.KindWorkspace, profile.KindRole)
+			}
 			p := &profile.Profile{
 				Name:         args[0],
 				Description:  description,
 				Model:        model,
+				Kind:         kind,
 				Skills:       skills,
 				MCPServers:   mcpServers,
 				SystemPrompt: prompt,
@@ -503,6 +510,7 @@ func newProfileCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&description, "description", "d", "", "one-line description")
+	cmd.Flags().StringVar(&kind, "kind", "", "workspace (receives stack skill suggestions) or role")
 	cmd.Flags().StringVarP(&model, "model", "m", "", "Ollama model")
 	cmd.Flags().StringSliceVarP(&skills, "skill", "s", nil, "skill names (repeatable)")
 	cmd.Flags().StringSliceVar(&mcpServers, "mcp-server", nil, "MCP server names (repeatable)")
@@ -916,99 +924,99 @@ Exit codes (after printing the report):
 					return err
 				}
 			} else {
-			fmt.Printf("=== Intelligence Stack Deep Probe ===\n\n")
-			if status.Bob.Error != "" {
-				fmt.Printf("bob:     %s\n", status.Bob.Error)
-			} else {
-				fmt.Printf("bob:     recipe=%s clean=%v drift=%v", status.Bob.Recipe, status.Bob.Clean, status.Bob.Drift)
-				if status.Bob.Code != "" {
-					fmt.Printf(" code=%s", status.Bob.Code)
-				}
-				fmt.Println()
-				if status.Bob.RawNote != "" {
-					fmt.Printf("         note=%s\n", status.Bob.RawNote)
-				}
-				for _, a := range status.Bob.NextActions {
-					fmt.Printf("       → %s\n", a)
-				}
-			}
-			if status.Cortex.Error != "" {
-				fmt.Printf("cortex:  %s\n", status.Cortex.Error)
-			} else {
-				fmt.Printf("cortex:  ready=%v source=%s\n", status.Cortex.Ready, status.Cortex.Source)
-				if status.Cortex.Version != "" {
-					fmt.Printf("         version=%s\n", firstLineCLI(status.Cortex.Version))
-				}
-				if status.Cortex.Sessions > 0 {
-					fmt.Printf("         sessions=%d active=%d stale=%d completed=%d verified=%d\n",
-						status.Cortex.Sessions, status.Cortex.Active, status.Cortex.Stale,
-						status.Cortex.Completed, status.Cortex.Verified)
-					fmt.Printf("         completion_rate=%.1f%% verified_rate=%.1f%%\n",
-						status.Cortex.CompletionRate*100, status.Cortex.VerifiedRate*100)
-				}
-				if status.Cortex.ActiveWorkspace > 0 {
-					fmt.Printf("         active_in_workspace=%d\n", status.Cortex.ActiveWorkspace)
-				}
-				for _, s := range status.Cortex.StaleSamples {
-					fmt.Printf("         stale %s [%s] %s — %s\n", s.ID, s.Repository, s.Phase, s.Goal)
-				}
-			}
-			if status.MCPHub.Error != "" {
-				fmt.Printf("mcphub:  %s\n", status.MCPHub.Error)
-			} else {
-				fmt.Printf("mcphub:  calls=%d errors=%d tokens=%d servers=%d",
-					status.MCPHub.TotalCalls, status.MCPHub.ErrorCount,
-					status.MCPHub.EstTokens, status.MCPHub.ServerCount)
-				if status.MCPHub.EnabledCount > 0 {
-					fmt.Printf(" enabled=%d", status.MCPHub.EnabledCount)
-				}
-				fmt.Println()
-				if len(status.MCPHub.TopServers) > 0 {
-					fmt.Printf("         top=%s\n", strings.Join(status.MCPHub.TopServers, ", "))
-				}
-				if len(status.MCPHub.UnusedEnabled) > 0 {
-					fmt.Printf("         unused_enabled=%s\n", strings.Join(status.MCPHub.UnusedEnabled, ", "))
-				}
-				if len(status.MCPHub.AgentsDrift) > 0 {
-					fmt.Printf("         agents_drift=%s\n", strings.Join(status.MCPHub.AgentsDrift, ", "))
-				}
-			}
-			if len(status.Readiness) > 0 {
-				fmt.Printf("\n-- readiness --\n")
-				for _, r := range status.Readiness {
-					icon := "✓"
-					if !r.Ready {
-						icon = "✗"
-					}
-					fmt.Printf(" %s %-10s", icon, r.Tool)
-					if r.Error != "" {
-						fmt.Printf(" %s", r.Error)
-					} else if r.Detail != "" {
-						d := r.Detail
-						if len(d) > 90 {
-							d = d[:90] + "…"
-						}
-						fmt.Printf(" %s", d)
+				fmt.Printf("=== Intelligence Stack Deep Probe ===\n\n")
+				if status.Bob.Error != "" {
+					fmt.Printf("bob:     %s\n", status.Bob.Error)
+				} else {
+					fmt.Printf("bob:     recipe=%s clean=%v drift=%v", status.Bob.Recipe, status.Bob.Clean, status.Bob.Drift)
+					if status.Bob.Code != "" {
+						fmt.Printf(" code=%s", status.Bob.Code)
 					}
 					fmt.Println()
-					for _, a := range r.NextActions {
+					if status.Bob.RawNote != "" {
+						fmt.Printf("         note=%s\n", status.Bob.RawNote)
+					}
+					for _, a := range status.Bob.NextActions {
 						fmt.Printf("       → %s\n", a)
 					}
 				}
-			}
-			// Retrieval green light
-			retIcon := "✓"
-			if !status.RetrievalReady {
-				retIcon = "✗"
-			}
-			fmt.Printf("\n%s retrieval_ready=%v\n", retIcon, status.RetrievalReady)
-			if status.RetrievalDetail != "" {
-				fmt.Printf("  %s\n", status.RetrievalDetail)
-			}
-			if status.MCPHub != nil && len(status.MCPHub.HighErrorServers) > 0 {
-				fmt.Printf("\nmcphub high-error servers: %s\n", strings.Join(status.MCPHub.HighErrorServers, ", "))
-			}
-			fmt.Printf("\n%s\n", status.Summary)
+				if status.Cortex.Error != "" {
+					fmt.Printf("cortex:  %s\n", status.Cortex.Error)
+				} else {
+					fmt.Printf("cortex:  ready=%v source=%s\n", status.Cortex.Ready, status.Cortex.Source)
+					if status.Cortex.Version != "" {
+						fmt.Printf("         version=%s\n", firstLineCLI(status.Cortex.Version))
+					}
+					if status.Cortex.Sessions > 0 {
+						fmt.Printf("         sessions=%d active=%d stale=%d completed=%d verified=%d\n",
+							status.Cortex.Sessions, status.Cortex.Active, status.Cortex.Stale,
+							status.Cortex.Completed, status.Cortex.Verified)
+						fmt.Printf("         completion_rate=%.1f%% verified_rate=%.1f%%\n",
+							status.Cortex.CompletionRate*100, status.Cortex.VerifiedRate*100)
+					}
+					if status.Cortex.ActiveWorkspace > 0 {
+						fmt.Printf("         active_in_workspace=%d\n", status.Cortex.ActiveWorkspace)
+					}
+					for _, s := range status.Cortex.StaleSamples {
+						fmt.Printf("         stale %s [%s] %s — %s\n", s.ID, s.Repository, s.Phase, s.Goal)
+					}
+				}
+				if status.MCPHub.Error != "" {
+					fmt.Printf("mcphub:  %s\n", status.MCPHub.Error)
+				} else {
+					fmt.Printf("mcphub:  calls=%d errors=%d tokens=%d servers=%d",
+						status.MCPHub.TotalCalls, status.MCPHub.ErrorCount,
+						status.MCPHub.EstTokens, status.MCPHub.ServerCount)
+					if status.MCPHub.EnabledCount > 0 {
+						fmt.Printf(" enabled=%d", status.MCPHub.EnabledCount)
+					}
+					fmt.Println()
+					if len(status.MCPHub.TopServers) > 0 {
+						fmt.Printf("         top=%s\n", strings.Join(status.MCPHub.TopServers, ", "))
+					}
+					if len(status.MCPHub.UnusedEnabled) > 0 {
+						fmt.Printf("         unused_enabled=%s\n", strings.Join(status.MCPHub.UnusedEnabled, ", "))
+					}
+					if len(status.MCPHub.AgentsDrift) > 0 {
+						fmt.Printf("         agents_drift=%s\n", strings.Join(status.MCPHub.AgentsDrift, ", "))
+					}
+				}
+				if len(status.Readiness) > 0 {
+					fmt.Printf("\n-- readiness --\n")
+					for _, r := range status.Readiness {
+						icon := "✓"
+						if !r.Ready {
+							icon = "✗"
+						}
+						fmt.Printf(" %s %-10s", icon, r.Tool)
+						if r.Error != "" {
+							fmt.Printf(" %s", r.Error)
+						} else if r.Detail != "" {
+							d := r.Detail
+							if len(d) > 90 {
+								d = d[:90] + "…"
+							}
+							fmt.Printf(" %s", d)
+						}
+						fmt.Println()
+						for _, a := range r.NextActions {
+							fmt.Printf("       → %s\n", a)
+						}
+					}
+				}
+				// Retrieval green light
+				retIcon := "✓"
+				if !status.RetrievalReady {
+					retIcon = "✗"
+				}
+				fmt.Printf("\n%s retrieval_ready=%v\n", retIcon, status.RetrievalReady)
+				if status.RetrievalDetail != "" {
+					fmt.Printf("  %s\n", status.RetrievalDetail)
+				}
+				if status.MCPHub != nil && len(status.MCPHub.HighErrorServers) > 0 {
+					fmt.Printf("\nmcphub high-error servers: %s\n", strings.Join(status.MCPHub.HighErrorServers, ", "))
+				}
+				fmt.Printf("\n%s\n", status.Summary)
 			} // end !jsonOut
 
 			if requireCore {
@@ -1150,6 +1158,91 @@ Minerva-local activation (~/.agents/.minerva-skills.json) is secondary.
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
 	cmd.Flags().BoolVar(&apply, "apply", false, "auto-apply allowlisted profile add-skills suggestions")
 	cmd.Flags().BoolVar(&applyLocal, "apply-local", false, "also auto-apply Minerva-local skill activate")
+	return cmd
+}
+
+func newLearnCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "learn",
+		Short: "One-page onboarding brief for agents",
+		Long:  `Print the Minerva contract: thesis, activation honesty, commands, exit codes, and MCP tools. Cheap — no deep stack probes.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			mgr := skillManager()
+			_ = mgr.LoadAll()
+			pmgr := profileManager()
+			_ = pmgr.LoadAll()
+			ws, _ := os.Getwd()
+			brief := learn.Build(mgr, pmgr, ws)
+			if jsonOut {
+				return printJSON(brief)
+			}
+			fmt.Println(brief.Thesis)
+			fmt.Println()
+			fmt.Println(brief.Activation)
+			fmt.Println()
+			fmt.Println("Commands:")
+			for _, c := range brief.Commands {
+				fmt.Printf("  %s\n", c)
+			}
+			fmt.Println()
+			fmt.Println("Exit codes:")
+			for _, code := range []string{"0", "1", "2", "3"} {
+				if msg, ok := brief.ExitCodes[code]; ok {
+					fmt.Printf("  %s  %s\n", code, msg)
+				}
+			}
+			fmt.Println()
+			fmt.Println("MCP tools (read-only):")
+			for _, tool := range brief.Tools {
+				fmt.Printf("  %s — %s\n", tool.Name, tool.UseWhen)
+			}
+			if len(brief.Next) > 0 {
+				fmt.Println()
+				fmt.Println("Next:")
+				for _, s := range brief.Next {
+					fmt.Printf("  [%s] %s\n", s.Category, s.Message)
+					if s.Action != "" {
+						fmt.Printf("       → %s\n", s.Action)
+					}
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
+	return cmd
+}
+
+func newSkillResolveCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "resolve <intent>",
+		Short: "Rank skills for a natural-language intent",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := skillManager()
+			if err := mgr.LoadAll(); err != nil {
+				return err
+			}
+			pmgr := profileManager()
+			_ = pmgr.LoadAll()
+			res := skill.Resolve(strings.Join(args, " "), mgr.All(), pmgr.All())
+			if jsonOut {
+				return printJSON(res)
+			}
+			if len(res.Hits) == 0 {
+				fmt.Println("no matching skills")
+				return nil
+			}
+			for i, hit := range res.Hits {
+				fmt.Printf("%d. %s  score=%d  %s\n", i+1, hit.Name, hit.Score, hit.Reason)
+				fmt.Printf("   → %s\n", hit.Action)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
 	return cmd
 }
 
@@ -1477,7 +1570,7 @@ func newBridgeShowCmd() *cobra.Command {
 			}
 			snip, err := bridge.Render(p, bridge.Options{
 				AgentsDir:     agentsDir(),
-				ProfileName:  p.Name,
+				ProfileName:   p.Name,
 				Harness:       harness,
 				MinervaBinary: "minerva",
 			}, fmtFormat)
@@ -1748,6 +1841,9 @@ func profileYAML(p *profile.Profile) (string, error) {
 	}
 	if p.Model != "" {
 		fmt.Fprintf(&b, "model: %s\n", p.Model)
+	}
+	if k := p.EffectiveKind(); k != "" {
+		fmt.Fprintf(&b, "kind: %s\n", k)
 	}
 	fmt.Fprintf(&b, "skills: [%s]\n", strings.Join(p.Skills, ", "))
 	fmt.Fprintf(&b, "mcp_servers: [%s]\n", strings.Join(p.MCPServers, ", "))
