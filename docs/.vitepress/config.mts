@@ -99,6 +99,7 @@ export default defineConfig({
             { text: 'Stack readiness', link: '/guide/stack' },
             { text: 'Evidence & fcheap', link: '/guide/evidence' },
             { text: 'MCP integration', link: '/guide/mcp' },
+            { text: 'Session-native loop', link: '/guide/session-native' },
           ],
         },
         {

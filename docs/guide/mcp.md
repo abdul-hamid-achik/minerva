@@ -24,22 +24,27 @@ There are no MCP aliases for the old 36 CRUD names. Create, activate, delete, ad
 
 ## MCPHub
 
+Do not commit a live `~/.config/mcphub/mcphub.yaml` (vault refs). Merge this
+fragment, then restart the gateway. Full loop: [Session-native](/guide/session-native).
+
 ```yaml
-servers:
-  minerva:
-    command: minerva
-    args: [mcp, serve]
-    enabled: true
-    tags: [agent, skills, profiles]
-    use_when:
-      - Resolve which skill to load for the current task
-      - Check agent-library or stack readiness
-      - Get a Minerva onboarding brief
+expose: lazy
 pin:
   - minerva__learn
   - minerva__resolve_skill
   - minerva__status
   - minerva__suggest
+servers:
+  minerva:
+    command: minerva   # or an absolute path to the binary you built
+    args: [mcp, serve]
+    enabled: true
+    tags: [agent, skills, profiles, readiness]
+    use_when:
+      - Resolve which skill to load for the current task
+      - Check whether the shared agent library or companion stack is ready
+      - Get a one-page Minerva onboarding brief
+      - Rank next library or stack actions without mutating disk
 ```
 
 ## Trust (sonar / local-agent)

@@ -17,6 +17,7 @@ A shared agent library, a tiered inventory of your local stack, and an honest de
 | Portable library for a team machine | `minerva library export` / `import` / `lint` |
 | Wire a profile into local-agent | `minerva bridge show <profile>` |
 | Connect an agent harness | [MCP integration](/guide/mcp) |
+| Call Minerva from sonar / MCPHub | [Session-native loop](/guide/session-native) |
 
 ## Install
 

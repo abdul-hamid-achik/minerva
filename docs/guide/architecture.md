@@ -36,7 +36,7 @@ browser-specs/    Cairn docs-site contracts
 
 | Tool | Relationship |
 |------|----------------|
-| local-agent | Primary runtime consumer of `~/.agents` |
+| local-agent / sonar | Runtime consumers of `~/.agents` ([session-native](/guide/session-native)) |
 | MCPHub | Gateway + call intelligence |
 | Cortex | Task kernel (overview/stale signals only) |
 | Bob | Repo contract |
