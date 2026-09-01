@@ -36,7 +36,7 @@ const structuredData = JSON.stringify({
         priceCurrency: 'USD',
       },
       featureList: [
-        'Parse Claude Code, Codex, Cursor, OpenCode, and Copilot transcripts',
+        'Parse Claude Code, Codex, Cursor, OpenCode, Copilot, and Gemini CLI transcripts',
         'Propose skills from tool-call signals',
         'Canonical ~/.agents/skills library',
         'Cross-harness skill sync and doctor',

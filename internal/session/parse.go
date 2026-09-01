@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -468,8 +469,208 @@ func parseCopilot(s Session) (Session, error) {
 	return s, err
 }
 
+// parseGemini reads Gemini CLI chats (~/.gemini/tmp/<hash>/chats/session-*.jsonl).
+//
+// The JSONL log is append-only: line 1 is session metadata, later lines are
+// message records ({id, type: user|gemini|info, content, toolCalls}), partial
+// revisions of the same id, or `$set`/`$push` snapshots of `messages`. A
+// message id may appear many times as tokens and tool results stream in, so
+// the latest revision wins but keeps its first position. Legacy `.json`
+// exports ({sessionId, messages: [...]}) are still read. Antigravity
+// conversation directories are protobuf and stay metadata-only.
 func parseGemini(s Session) (Session, error) {
-	return parseGenericJSON(s)
+	st, err := os.Stat(s.Path)
+	if err != nil {
+		return s, err
+	}
+	if st.IsDir() {
+		return s, nil
+	}
+	type rec struct {
+		msg map[string]any
+	}
+	var order []string
+	byID := map[string]*rec{}
+	upsert := func(m map[string]any) {
+		id, _ := m["id"].(string)
+		if id == "" {
+			id = fmt.Sprintf("_anon_%d", len(order))
+		}
+		if r, ok := byID[id]; ok {
+			// Merge: later revisions may carry only the changed keys.
+			for k, v := range m {
+				r.msg[k] = v
+			}
+			return
+		}
+		byID[id] = &rec{msg: m}
+		order = append(order, id)
+	}
+	meta := func(m map[string]any) {
+		if id, ok := m["sessionId"].(string); ok && id != "" {
+			s.ID = id
+		}
+		if ts, ok := m["startTime"].(string); ok && s.StartedAt.IsZero() {
+			if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				s.StartedAt = t
+			}
+		}
+		if cwd, ok := m["cwd"].(string); ok && cwd != "" && s.Workspace == "" {
+			s.Workspace = cwd
+		}
+		if dir, ok := m["projectRoot"].(string); ok && dir != "" && s.Workspace == "" {
+			s.Workspace = dir
+		}
+	}
+	snapshot := func(v any) {
+		arr, ok := v.([]any)
+		if !ok {
+			return
+		}
+		for _, item := range arr {
+			if m, ok := item.(map[string]any); ok {
+				upsert(m)
+			}
+		}
+	}
+	handle := func(obj map[string]any) {
+		if _, ok := obj["$rewindTo"]; ok {
+			return
+		}
+		if set, ok := obj["$set"].(map[string]any); ok {
+			meta(set)
+			snapshot(set["messages"])
+			return
+		}
+		if push, ok := obj["$push"].(map[string]any); ok {
+			snapshot(push["messages"])
+			return
+		}
+		if _, isMsg := obj["type"].(string); isMsg && obj["id"] != nil {
+			upsert(obj)
+			return
+		}
+		// metadata line (first line, or a summary update)
+		meta(obj)
+		snapshot(obj["messages"])
+	}
+
+	if strings.HasSuffix(strings.ToLower(s.Path), ".jsonl") {
+		if err := parseJSONL(s.Path, handle); err != nil {
+			return s, err
+		}
+	} else {
+		data, err := os.ReadFile(s.Path)
+		if err != nil {
+			return s, err
+		}
+		var obj map[string]any
+		if json.Unmarshal(data, &obj) != nil {
+			return s, nil
+		}
+		handle(obj)
+	}
+
+	for _, id := range order {
+		m := byID[id].msg
+		typ, _ := m["type"].(string)
+		var turn Turn
+		switch typ {
+		case "user":
+			turn.Role = "user"
+		case "gemini", "assistant", "model":
+			turn.Role = "assistant"
+		default:
+			continue // info, error, warning
+		}
+		turn.Text = geminiText(m["content"])
+		if calls, ok := m["toolCalls"].([]any); ok {
+			for _, c := range calls {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				name, _ := cm["name"].(string)
+				if name == "" {
+					continue
+				}
+				tc := ToolCall{Name: name, Args: compactJSON(cm["args"]), Category: categorize(name)}
+				if status, ok := cm["status"].(string); ok && (status == "error" || status == "failed" || status == "cancelled") {
+					tc.IsError = true
+				}
+				tc.Result = truncate(compactJSON(cm["result"]), 500)
+				turn.ToolCalls = append(turn.ToolCalls, tc)
+				if tc.Category == CatSkill {
+					turn.SkillsInvoked = append(turn.SkillsInvoked, skillNamesFromArgs(tc.Args)...)
+				}
+			}
+		}
+		if turn.Text != "" || len(turn.ToolCalls) > 0 {
+			s.Turns = append(s.Turns, turn)
+		}
+	}
+	if s.ID == "" {
+		s.ID = strings.TrimSuffix(filepath.Base(s.Path), filepath.Ext(s.Path))
+	}
+	if s.Workspace == "" {
+		s.Workspace = geminiWorkspaceFromProjects(s.Path)
+	}
+	return s, nil
+}
+
+// geminiText flattens Gemini content (string or [{text}] parts).
+func geminiText(v any) string {
+	switch c := v.(type) {
+	case string:
+		return c
+	case []any:
+		var b strings.Builder
+		for _, item := range c {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, ok := m["text"].(string); ok && t != "" {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(t)
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// geminiWorkspaceFromProjects reverse-maps …/tmp/<hash>/chats/x.jsonl to a
+// project dir via ~/.gemini/projects.json ({"projects": {"/path": "<hash>"}}).
+// Best effort; returns "" when the file or shape is unknown.
+func geminiWorkspaceFromProjects(path string) string {
+	chats := filepath.Dir(path)
+	hash := filepath.Base(filepath.Dir(chats))
+	tmp := filepath.Dir(filepath.Dir(chats))
+	root := filepath.Dir(tmp) // ~/.gemini
+	if filepath.Base(tmp) != "tmp" || hash == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(root, "projects.json"))
+	if err != nil {
+		return ""
+	}
+	var obj map[string]any
+	if json.Unmarshal(data, &obj) != nil {
+		return ""
+	}
+	projects, ok := obj["projects"].(map[string]any)
+	if !ok {
+		projects = obj
+	}
+	for dir, v := range projects {
+		if h, ok := v.(string); ok && h == hash && strings.HasPrefix(dir, "/") {
+			return dir
+		}
+	}
+	return ""
 }
 
 func parseGenericJSON(s Session) (Session, error) {
@@ -523,13 +724,7 @@ func appendContent(turn *Turn, content any) {
 				args := compactJSON(m["input"])
 				tc := ToolCall{Name: name, Args: args, Category: categorize(name)}
 				turn.ToolCalls = append(turn.ToolCalls, tc)
-				if tc.Category == CatSkill {
-					turn.SkillsInvoked = append(turn.SkillsInvoked, skillNamesFromArgs(args)...)
-					if name != "Skill" && name != "skill" && !strings.Contains(strings.ToLower(name), "mcp") {
-						// tool named like a skill
-					}
-				}
-				if strings.EqualFold(name, "Skill") {
+				if tc.Category == CatSkill || strings.EqualFold(name, "Skill") {
 					turn.SkillsInvoked = append(turn.SkillsInvoked, skillNamesFromArgs(args)...)
 				}
 			case "tool_result":

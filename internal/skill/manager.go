@@ -55,15 +55,6 @@ func ForAgents(agentsDir string) *Manager {
 	return NewManager(filepath.Join(agentsDir, "skills"))
 }
 
-// NewManagerWithState is kept for callers that pass an agents root plus skills dir.
-// The state file is no longer used.
-func NewManagerWithState(agentsDir string, dirs ...string) *Manager {
-	if len(dirs) > 0 {
-		return NewManager(dirs...)
-	}
-	return ForAgents(agentsDir)
-}
-
 // AddSearchPath adds a directory to search for skills.
 func (m *Manager) AddSearchPath(dir string) {
 	m.mu.Lock()

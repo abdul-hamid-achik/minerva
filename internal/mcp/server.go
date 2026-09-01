@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -64,6 +63,12 @@ func NewServer(agentsDir string) (*Server, error) {
 // Run serves newline-delimited MCP JSON-RPC over stdio until cancellation.
 func (s *Server) Run(ctx context.Context) error {
 	return s.srv.Run(ctx, &sdkmcp.StdioTransport{})
+}
+
+// Connect serves one session over an arbitrary transport (in-memory in tests,
+// or an embedding host). Callers close the returned session.
+func (s *Server) Connect(ctx context.Context, t sdkmcp.Transport) (*sdkmcp.ServerSession, error) {
+	return s.srv.Connect(ctx, t, nil)
 }
 
 func (s *Server) register() {
@@ -123,7 +128,7 @@ type FilterInput struct {
 }
 
 func (s *Server) filter(in FilterInput) (session.Filter, error) {
-	dur, err := parseSince(in.Since)
+	dur, err := session.ParseSince(in.Since)
 	if err != nil {
 		return session.Filter{}, err
 	}
@@ -282,24 +287,6 @@ func (s *Server) handleApply(ctx context.Context, _ *sdkmcp.CallToolRequest, in 
 	_ = s.skillManager.LoadAll()
 	result := map[string]any{"applied": p.ID, "path": path, "name": p.Name}
 	return textResult(result), result, nil
-}
-
-func parseSince(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, nil
-	}
-	if d, err := time.ParseDuration(s); err == nil {
-		return d, nil
-	}
-	if strings.HasSuffix(s, "d") {
-		n := strings.TrimSuffix(s, "d")
-		var days int
-		if _, err := fmt.Sscanf(n, "%d", &days); err == nil {
-			return time.Duration(days) * 24 * time.Hour, nil
-		}
-	}
-	return 0, fmt.Errorf("invalid since %q", s)
 }
 
 func textResult(v any) *sdkmcp.CallToolResult {

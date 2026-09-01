@@ -81,6 +81,84 @@ func TestFromSignals_SkipsBrowseOnlyNames(t *testing.T) {
 	}
 }
 
+func TestMergeObserved_Idempotent(t *testing.T) {
+	body := "# Git Workflow\n\n## When\n\nUse when running git.\n\n## Steps\n\n1. Do it.\n"
+	p := Proposal{
+		Kind: KindUpdate, Name: "git-workflow", Description: "repeated shell family git",
+		Evidence: []signal.Evidence{{Harness: "claude", SessionID: "abcdef123456"}},
+	}
+	once := MergeObserved(body, p)
+	if !strings.Contains(once, ObservedHeading) || !strings.Contains(once, "- repeated shell family git (1 session; last claude abcdef12)") {
+		t.Fatalf("first merge:\n%s", once)
+	}
+	if !strings.HasPrefix(once, "# Git Workflow\n\n## When\n\nUse when running git.\n\n## Steps\n\n1. Do it.") {
+		t.Fatalf("original body altered:\n%s", once)
+	}
+	// Same proposal again: no growth.
+	twice := MergeObserved(once, p)
+	if twice != once {
+		t.Fatalf("second merge changed body:\n%s\n---\n%s", once, twice)
+	}
+	// Same pattern, more evidence: bullet updated in place, not duplicated.
+	p.Evidence = append(p.Evidence, signal.Evidence{Harness: "codex", SessionID: "zz"})
+	third := MergeObserved(twice, p)
+	if strings.Count(third, "repeated shell family git") != 1 {
+		t.Fatalf("bullet duplicated:\n%s", third)
+	}
+	if !strings.Contains(third, "(2 sessions; last codex zz)") {
+		t.Fatalf("count not refreshed:\n%s", third)
+	}
+	// A different pattern adds a second bullet.
+	other := Proposal{Kind: KindUpdate, Name: "git-workflow", Description: "retry after error: Bash"}
+	fourth := MergeObserved(third, other)
+	if strings.Count(fourth, "\n- ") != 2 || strings.Count(fourth, ObservedHeading) != 1 {
+		t.Fatalf("expected two bullets under one heading:\n%s", fourth)
+	}
+}
+
+func TestMergeObserved_MigratesLegacyAppends(t *testing.T) {
+	legacy := "# Skill\n\nbody\n\n## Observed later\n\nrepeated shell family git\n\n## Observed later\n\nretry after error: Bash\n\n## Notes\n\nkeep me\n"
+	p := Proposal{Kind: KindUpdate, Name: "x", Description: "repeated shell family git"}
+	got := MergeObserved(legacy, p)
+	if strings.Contains(got, "## Observed later") {
+		t.Fatalf("legacy heading survived:\n%s", got)
+	}
+	if strings.Count(got, ObservedHeading) != 1 || strings.Count(got, "\n- ") != 2 {
+		t.Fatalf("expected one section with two bullets:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "## Notes\n\nkeep me") {
+		t.Fatalf("trailing section lost:\n%s", got)
+	}
+}
+
+func TestApplyUpdate_TwiceDoesNotGrow(t *testing.T) {
+	dir := t.TempDir()
+	mgr := skill.ForAgents(dir)
+	if err := mgr.Create(filepath.Join(dir, "skills"), "git-workflow", "Use when running git.", "# Git\n\nSteps here.\n"); err != nil {
+		t.Fatal(err)
+	}
+	sig := signal.Signal{Kind: signal.KindShellFam, Key: "git", Message: "repeated shell family git",
+		Evidence: []signal.Evidence{{Harness: "claude", SessionID: "s1"}}}
+	props := FromSignals([]signal.Signal{sig}, mgr.All())
+	if len(props) != 1 || props[0].Kind != KindUpdate {
+		t.Fatalf("expected update proposal, got %#v", props)
+	}
+	if _, err := Apply(dir, props[0]); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := os.ReadFile(filepath.Join(dir, "skills", "git-workflow", "SKILL.md"))
+	if _, err := Apply(dir, props[0]); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := os.ReadFile(filepath.Join(dir, "skills", "git-workflow", "SKILL.md"))
+	if string(first) != string(second) {
+		t.Fatalf("re-apply changed file:\n%s\n---\n%s", first, second)
+	}
+	if !strings.Contains(string(first), "Steps here.") || !strings.Contains(string(first), ObservedHeading) {
+		t.Fatalf("unexpected body:\n%s", first)
+	}
+}
+
 func TestLoadGapNotApplyable(t *testing.T) {
 	p := Proposal{ID: "x", Kind: KindLoadGap, Name: "doc-writer"}
 	if _, err := Apply(t.TempDir(), p); err == nil {

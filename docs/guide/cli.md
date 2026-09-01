@@ -52,11 +52,27 @@ minerva skill update <name> [-d description] [--content body|--from-file path]
 minerva skill delete <name>
 minerva skill resolve "<intent>"
 minerva skill lint
-minerva skill install owner/repo[/path]
-minerva skill sync [--to claude,codex] [--dry-run] [--json]
+minerva skill install owner/repo[/path] [--force]
+minerva skill sync [--to claude,codex] [--dry-run] [--force] [--json]
 ```
 
 `skill lint` exits `1` when errors (secrets, invalid bodies) are present.
+
+### Sync safety
+
+`skill sync` replaces symlinks and byte-identical copies freely. A directory
+in a harness tree that Minerva did not write and whose contents differ is the
+harness's own work: it is reported as `skipped` with a reason and the command
+exits `1`. Pass `--force` to replace it. `--dry-run` writes nothing, not even
+the harness skills directory.
+
+`skill install` fails when the repository holds several `SKILL.md` files and
+no path narrows the choice; the error lists them. It also refuses to replace a
+local skill that `.skill-lock.json` does not track unless `--force`.
+
+`harness doctor` distinguishes `missing`, `extra`, `drift` (different
+contents, or a symlink pointing outside `~/.agents/skills`), and
+`broken-link`.
 
 ## MCP
 

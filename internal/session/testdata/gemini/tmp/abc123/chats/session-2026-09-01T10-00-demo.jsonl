@@ -1,0 +1,8 @@
+{"sessionId":"gem-demo-1","projectHash":"abc123","startTime":"2026-09-01T10:00:00.000Z","lastUpdated":"2026-09-01T10:05:00.000Z"}
+{"id":"m1","timestamp":"2026-09-01T10:00:01.000Z","type":"user","content":[{"text":"add a changelog entry for the release"}]}
+{"id":"m2","timestamp":"2026-09-01T10:00:02.000Z","type":"gemini","content":"","toolCalls":[{"id":"t1","name":"read_file","args":{"file_path":"CHANGELOG.md"},"status":"pending"}]}
+{"id":"m2","timestamp":"2026-09-01T10:00:03.000Z","type":"gemini","content":"Reading the changelog.","toolCalls":[{"id":"t1","name":"read_file","args":{"file_path":"CHANGELOG.md"},"status":"success","result":[{"functionResponse":{"response":{"output":"# Changelog"}}}]}]}
+{"id":"m3","timestamp":"2026-09-01T10:00:04.000Z","type":"info","content":"Model switched to gemini-2.5-pro"}
+{"$set":{"messages":[{"id":"m1","type":"user","content":[{"text":"add a changelog entry for the release"}]},{"id":"m2","type":"gemini","content":"Reading the changelog.","toolCalls":[{"id":"t1","name":"read_file","args":{"file_path":"CHANGELOG.md"},"status":"success"}]},{"id":"m4","type":"gemini","content":"Done.","toolCalls":[{"id":"t2","name":"replace","args":{"file_path":"CHANGELOG.md","old_string":"## [Unreleased]","new_string":"## [Unreleased]\n\n- entry"},"status":"error","result":[{"functionResponse":{"response":{"error":"denied"}}}]},{"id":"t3","name":"run_shell_command","args":{"command":"git diff --stat"},"status":"success"}]}]}}
+{"$push":{"messages":[{"id":"m5","type":"user","content":"no, put it under 1.0.0 instead"}]}}
+{"$rewindTo":"m4"}

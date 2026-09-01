@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abdul-hamid-achik/minerva/internal/session"
 	"github.com/abdul-hamid-achik/minerva/internal/signal"
 	"github.com/abdul-hamid-achik/minerva/internal/skill"
 )
@@ -20,8 +21,15 @@ const (
 	KindNew     = "new_skill"
 	KindUpdate  = "update_skill"
 	KindLoadGap = "load_gap"
-	KindMerge   = "merge"
 )
+
+// ObservedHeading is the Minerva-owned section that update proposals merge into.
+// Everything else in a SKILL.md body is left untouched.
+const ObservedHeading = "## Observed patterns"
+
+// legacyObservedHeading was appended verbatim by earlier apply runs; it is
+// migrated into ObservedHeading on the next update.
+const legacyObservedHeading = "## Observed later"
 
 // Proposal is one actionable skill recommendation.
 type Proposal struct {
@@ -75,7 +83,10 @@ func LoadStore(agentsDir string) (Store, error) {
 func Find(agentsDir, id string) (*Proposal, error) {
 	st, err := LoadStore(agentsDir)
 	if err != nil {
-		return nil, err
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("proposal %q not found — no proposals saved yet, run minerva propose first", id)
+		}
+		return nil, fmt.Errorf("read proposals store: %w", err)
 	}
 	for i := range st.Proposals {
 		if st.Proposals[i].ID == id {
@@ -113,7 +124,11 @@ func FromSignals(sigs []signal.Signal, catalog []*skill.Skill) []Proposal {
 			} else {
 				p = newSkillProposal(name, "Use when running repeated "+sig.Key+" commands in an agent session.", sig)
 			}
-		case signal.KindLongManual, signal.KindRepeat, signal.KindRetry, signal.KindCorrection:
+		case signal.KindLongManual, signal.KindCorrection:
+			// Diagnostic signals: they say a skill was missing, not which one.
+			// analyze reports them; propose has nothing concrete to draft.
+			continue
+		case signal.KindRepeat, signal.KindRetry:
 			name := slug(guessName(sig))
 			if onDisk[name] != nil {
 				p = updateProposal(name, sig)
@@ -125,7 +140,7 @@ func FromSignals(sigs []signal.Signal, catalog []*skill.Skill) []Proposal {
 		default:
 			continue
 		}
-		if p.Name == "" || seen[p.Kind+p.Name] || lowValueName(p.Name) || browseOnlyKey(sig.Key) {
+		if p.Name == "" || seen[p.Kind+p.Name] || trivialName(p.Name) || browseOnlyKey(sig.Key) {
 			continue
 		}
 		p.ID = proposalID(p.Kind, p.Name)
@@ -154,7 +169,7 @@ func updateProposal(name string, sig signal.Signal) Proposal {
 		Description: sig.Message,
 		Priority:    3,
 		Evidence:    sig.Evidence,
-		Action:      "minerva skill show " + name,
+		Action:      "minerva propose apply " + proposalID(KindUpdate, name) + " (merges into " + ObservedHeading + ")",
 	}
 }
 
@@ -213,19 +228,141 @@ func Apply(agentsDir string, p Proposal) (string, error) {
 		}
 		return filepath.Join(skillsDir, p.Name, "SKILL.md"), nil
 	}
-	// update: append an Observed pattern section if draft present
+	// update: merge into the Minerva-owned "Observed patterns" section
 	existing := mgr.Get(p.Name)
 	if existing == nil {
 		return "", fmt.Errorf("skill %q not found", p.Name)
 	}
-	body := existing.Content
-	if !strings.Contains(body, p.Description) {
-		body = body + "\n\n## Observed later\n\n" + p.Description + "\n"
+	body := MergeObserved(existing.Content, p)
+	if body == existing.Content {
+		return existing.Path, nil
 	}
 	if err := mgr.Update(p.Name, nil, &body); err != nil {
 		return "", err
 	}
 	return existing.Path, nil
+}
+
+// MergeObserved returns body with p recorded as one bullet under
+// ObservedHeading. Re-applying the same proposal updates that bullet's
+// session count instead of appending again. A legacy "## Observed later"
+// section is folded in. Content outside the section is byte-for-byte intact.
+func MergeObserved(body string, p Proposal) string {
+	head, bullets, tail := splitObserved(body)
+	key := observedKey(p.Description)
+	line := observedBullet(p)
+	replaced := false
+	for i, b := range bullets {
+		if observedKey(b) == key {
+			bullets[i] = line
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		bullets = append(bullets, line)
+	}
+	var out strings.Builder
+	out.WriteString(strings.TrimRight(head, "\n"))
+	if out.Len() > 0 {
+		out.WriteString("\n\n")
+	}
+	out.WriteString(ObservedHeading)
+	out.WriteString("\n\n")
+	for _, b := range bullets {
+		out.WriteString(b)
+		out.WriteString("\n")
+	}
+	if tail = strings.TrimSpace(tail); tail != "" {
+		out.WriteString("\n")
+		out.WriteString(tail)
+		out.WriteString("\n")
+	}
+	return strings.TrimRight(out.String(), "\n")
+}
+
+// observedBullet renders one merged entry: description plus evidence summary.
+func observedBullet(p Proposal) string {
+	desc := strings.TrimSpace(p.Description)
+	if len(p.Evidence) == 0 {
+		return "- " + desc
+	}
+	n := len(p.Evidence)
+	last := p.Evidence[n-1]
+	unit := "sessions"
+	if n == 1 {
+		unit = "session"
+	}
+	ref := last.Harness
+	if last.SessionID != "" {
+		ref += " " + shortID(last.SessionID)
+	}
+	return fmt.Sprintf("- %s (%d %s; last %s)", desc, n, unit, strings.TrimSpace(ref))
+}
+
+// observedKey is the comparable part of a bullet: the description without
+// the trailing evidence parenthetical or list marker.
+func observedKey(line string) string {
+	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+	if i := strings.LastIndex(s, " ("); i > 0 && strings.HasSuffix(s, ")") {
+		s = s[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// splitObserved returns the body before the observed section, its bullets,
+// and everything after it. Legacy "## Observed later" paragraphs are
+// converted to bullets. When no section exists, head is the whole body.
+func splitObserved(body string) (head string, bullets []string, tail string) {
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == ObservedHeading || t == legacyObservedHeading {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return body, nil, ""
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if t == legacyObservedHeading {
+			continue // several legacy appends in a row: absorb them all
+		}
+		if strings.HasPrefix(t, "#") {
+			end = i
+			break
+		}
+	}
+	head = strings.Join(lines[:start], "\n")
+	tail = strings.Join(lines[end:], "\n")
+	seen := map[string]bool{}
+	for _, l := range lines[start+1 : end] {
+		t := strings.TrimSpace(l)
+		if t == "" || t == legacyObservedHeading {
+			continue
+		}
+		if !strings.HasPrefix(t, "-") {
+			t = "- " + t
+		}
+		k := observedKey(t)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		bullets = append(bullets, t)
+	}
+	return head, bullets, tail
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 func bodyOf(draft string) string {
@@ -296,10 +433,7 @@ func guessName(sig signal.Signal) string {
 	}
 }
 
-func lowValueName(name string) bool {
-	return trivialName(name) || browseOnlyName(name)
-}
-
+// trivialName rejects names like "read-read" where every part is the same tool.
 func trivialName(name string) bool {
 	parts := strings.Split(name, "-")
 	if len(parts) < 2 {
@@ -314,49 +448,23 @@ func trivialName(name string) bool {
 	return true
 }
 
-func browseOnlyName(name string) bool {
-	name = strings.TrimSuffix(name, "-loop")
-	parts := strings.Split(name, "-")
-	if len(parts) < 2 {
-		return false
-	}
-	browse := map[string]bool{
-		"read": true, "grep": true, "glob": true, "list": true, "search": true,
-		"view": true, "find": true, "cat": true, "ls": true,
-	}
-	for _, p := range parts {
-		if !browse[p] {
-			return false
-		}
-	}
-	return true
-}
-
+// browseOnlyKey is a safety net for repeat keys ("A → B → C") made only of
+// read/search tools. signal already drops these; proposals built from older
+// stores or hand-written signals still get filtered here.
 func browseOnlyKey(key string) bool {
 	if !strings.Contains(key, "→") {
 		return false
 	}
 	var names []string
 	for _, p := range strings.Split(key, "→") {
-		p = strings.TrimSpace(p)
-		if p != "" {
+		if p = strings.TrimSpace(p); p != "" {
 			names = append(names, p)
 		}
 	}
 	if len(names) < 2 {
 		return false
 	}
-	browse := map[string]bool{
-		"read": true, "grep": true, "glob": true, "list": true, "search": true,
-		"view": true, "find": true, "cat": true, "ls": true,
-	}
-	for _, n := range names {
-		n = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(n, "_", ""), "-", ""))
-		if !browse[n] {
-			return false
-		}
-	}
-	return true
+	return session.BrowseOnly(names...)
 }
 
 func canonicalTools(key string) string {
@@ -365,6 +473,10 @@ func canonicalTools(key string) string {
 	var out []string
 	for _, p := range parts {
 		n := strings.ToLower(strings.TrimSpace(p))
+		// "Bash(go)" → "go": the command is the meaningful part.
+		if i := strings.IndexByte(n, '('); i >= 0 {
+			n = strings.TrimSuffix(n[i+1:], ")")
+		}
 		n = strings.ReplaceAll(n, "_", "")
 		n = strings.ReplaceAll(n, "-", "")
 		if n == "" || seen[n] {

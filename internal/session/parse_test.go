@@ -87,6 +87,52 @@ func TestParseCopilot(t *testing.T) {
 	}
 }
 
+func TestParseGemini(t *testing.T) {
+	path := filepath.Join("testdata", "gemini", "tmp", "abc123", "chats", "session-2026-09-01T10-00-demo.jsonl")
+	s, err := Load(Session{Harness: harness.Gemini, Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summarize(&s)
+	if s.ID != "gem-demo-1" {
+		t.Fatalf("id=%q", s.ID)
+	}
+	if s.Workspace != "/tmp/gemini-demo" {
+		t.Fatalf("workspace=%q (projects.json reverse map)", s.Workspace)
+	}
+	if s.StartedAt.IsZero() {
+		t.Fatal("startedAt not parsed")
+	}
+	if s.FirstUserPrompt() != "add a changelog entry for the release" {
+		t.Fatalf("prompt=%q", s.FirstUserPrompt())
+	}
+	// m1 user, m2 gemini (latest revision), m4 gemini from $set, m5 user from $push; info skipped.
+	if s.TurnCount != 4 {
+		t.Fatalf("turns=%d %#v", s.TurnCount, s.Turns)
+	}
+	if s.ToolCount != 3 {
+		t.Fatalf("tools=%d %#v", s.ToolCount, s.Turns)
+	}
+	var sawErr, sawShell bool
+	for _, turn := range s.Turns {
+		for _, tc := range turn.ToolCalls {
+			if tc.Name == "replace" && tc.IsError {
+				sawErr = true
+			}
+			if tc.Name == "run_shell_command" && tc.Category == CatShell && tc.Command == "git" {
+				sawShell = true
+			}
+		}
+	}
+	if !sawErr || !sawShell {
+		t.Fatalf("err=%v shell=%v turns=%#v", sawErr, sawShell, s.Turns)
+	}
+	// The revised m2 must carry the final text, not the pending one.
+	if s.Turns[1].Text != "Reading the changelog." {
+		t.Fatalf("m2 text=%q", s.Turns[1].Text)
+	}
+}
+
 func TestList_FilterHarness(t *testing.T) {
 	home := t.TempDir()
 	proj := filepath.Join(home, ".claude", "projects", "demo")

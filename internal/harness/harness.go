@@ -91,10 +91,14 @@ func Catalog(env Env) []Harness {
 			LinkSkills:   true, SyncWritable: true,
 		},
 		{
-			ID: Gemini, DisplayName: "Gemini / Antigravity",
-			SkillsDir:    filepath.Join(home, ".gemini", "skills"),
-			SessionGlobs: []string{filepath.Join(home, ".gemini", "antigravity", "conversations", "*")},
-			LinkSkills:   true, SyncWritable: true,
+			ID: Gemini, DisplayName: "Gemini CLI / Antigravity",
+			SkillsDir: filepath.Join(home, ".gemini", "skills"),
+			SessionGlobs: []string{
+				filepath.Join(home, ".gemini", "tmp", "*", "chats", "*.jsonl"),
+				filepath.Join(home, ".gemini", "tmp", "*", "chats", "*.json"),
+				filepath.Join(home, ".gemini", "antigravity", "conversations", "*"),
+			},
+			LinkSkills: true, SyncWritable: true,
 		},
 		{
 			ID: Sonar, DisplayName: "sonar",

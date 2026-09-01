@@ -269,12 +269,13 @@ func newSkillLintCmd() *cobra.Command {
 }
 
 func newSkillInstallCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "install <owner/repo[/path]>",
 		Short: "Clone a GitHub skill into ~/.agents/skills and update .skill-lock.json",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := sync.Install(agentsDir(), args[0])
+			name, err := sync.Install(agentsDir(), args[0], force)
 			if err != nil {
 				return err
 			}
@@ -282,17 +283,19 @@ func newSkillInstallCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "replace a local skill that is not tracked in .skill-lock.json")
+	return cmd
 }
 
 func newSkillSyncCmd() *cobra.Command {
 	var to string
-	var dryRun, jsonOut bool
+	var dryRun, jsonOut, force bool
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Link or copy canonical skills into harness skill dirs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets := splitCSV(to)
-			acts, err := sync.Sync(sync.SyncOptions{Env: env(), To: targets, DryRun: dryRun})
+			acts, err := sync.Sync(sync.SyncOptions{Env: env(), To: targets, DryRun: dryRun, Force: force})
 			if err != nil {
 				return err
 			}
@@ -303,18 +306,30 @@ func newSkillSyncCmd() *cobra.Command {
 				fmt.Println("nothing to sync")
 				return nil
 			}
+			skipped := 0
 			for _, a := range acts {
 				state := "planned"
 				if a.Done {
 					state = "done"
 				}
+				if a.Method == sync.MethodSkip {
+					state = "skipped"
+					skipped++
+				}
 				fmt.Printf("  [%s] %s %s %s → %s\n", state, a.Harness, a.Method, a.Skill, a.To)
+				if a.Reason != "" {
+					fmt.Printf("       %s\n", a.Reason)
+				}
+			}
+			if skipped > 0 {
+				return ExitCode(1)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&to, "to", "", "comma-separated harness ids (default: all writable)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print actions without writing")
+	cmd.Flags().BoolVar(&force, "force", false, "replace harness copies whose contents differ from ~/.agents/skills")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
 	return cmd
 }

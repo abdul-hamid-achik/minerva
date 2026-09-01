@@ -3,11 +3,14 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/minerva/internal/harness"
 	"github.com/abdul-hamid-achik/minerva/internal/secret"
@@ -34,6 +37,9 @@ type ToolCall struct {
 	Result   string   `json:"result,omitempty"`
 	IsError  bool     `json:"is_error,omitempty"`
 	Category Category `json:"category"`
+	// Command is the leading executable of a shell call (git, go, npm, …).
+	// Empty for non-shell tools or when no command could be extracted.
+	Command string `json:"command,omitempty"`
 }
 
 // Turn is one user or assistant step.
@@ -203,7 +209,11 @@ func summarize(s *Session) {
 				s.Skills = append(s.Skills, name)
 			}
 		}
-		for _, tc := range t.ToolCalls {
+		for j := range t.ToolCalls {
+			tc := &t.ToolCalls[j]
+			if tc.Category == CatShell && tc.Command == "" {
+				tc.Command = ShellCommand(tc.Args)
+			}
 			if tc.Category == CatSkill && tc.Args != "" {
 				var obj map[string]any
 				if json.Unmarshal([]byte(tc.Args), &obj) == nil {
@@ -236,20 +246,44 @@ func CategoryOf(name string) Category {
 	return categorize(name)
 }
 
+// IsBrowse reports whether a category only inspects state (read/search).
+func IsBrowse(cat Category) bool {
+	return cat == CatRead || cat == CatSearch
+}
+
+// BrowseOnly reports whether every tool name is a read or search tool.
+// A sequence of pure browsing is not a skill candidate.
+func BrowseOnly(names ...string) bool {
+	if len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		if !IsBrowse(categorize(name)) {
+			return false
+		}
+	}
+	return true
+}
+
 func categorize(name string) Category {
-	n := strings.ToLower(name)
+	raw := strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(raw, "__") || strings.HasPrefix(raw, "mcp_") || strings.HasPrefix(raw, "mcp__") {
+		// Gateway-namespaced tools (server__tool) are MCP regardless of suffix.
+		return CatMCP
+	}
+	n := strings.ReplaceAll(strings.ReplaceAll(raw, "-", ""), "_", "")
 	switch {
-	case n == "skill" || n == "load_skill" || strings.Contains(n, "skill"):
+	case n == "skill" || n == "loadskill" || strings.Contains(n, "skill"):
 		return CatSkill
-	case n == "bash" || n == "shell" || n == "exec_command" || n == "run_terminal_cmd":
+	case n == "bash" || n == "shell" || n == "execcommand" || n == "runterminalcmd" || n == "runshellcommand" || n == "terminal" || n == "powershell":
 		return CatShell
-	case n == "read" || n == "readfile" || strings.HasPrefix(n, "read_"):
+	case n == "read" || n == "readfile" || n == "readmanyfiles" || n == "cat" || n == "view" || n == "viewfile" || n == "ls" || n == "list" || n == "listdir" || n == "listdirectory" || n == "readlints" || n == "webfetch" || n == "fetch" || strings.HasPrefix(n, "read"):
 		return CatRead
-	case n == "edit" || n == "write" || n == "strreplace" || strings.Contains(n, "edit") || n == "apply_patch":
+	case n == "edit" || n == "write" || n == "strreplace" || n == "replace" || n == "writefile" || n == "createfile" || n == "delete" || n == "deletefile" || strings.Contains(n, "edit") || n == "applypatch":
 		return CatEdit
-	case n == "grep" || n == "glob" || n == "semanticsearch" || strings.Contains(n, "search"):
+	case n == "grep" || n == "glob" || n == "find" || n == "rg" || n == "semanticsearch" || n == "codebasesearch" || n == "websearch" || strings.Contains(n, "search"):
 		return CatSearch
-	case strings.Contains(n, "mcp") || strings.Contains(n, "__"):
+	case strings.Contains(n, "mcp"):
 		return CatMCP
 	case n == "agent" || n == "task" || strings.Contains(n, "subagent"):
 		return CatSubagent
@@ -278,12 +312,246 @@ func compactJSON(v any) string {
 	}
 }
 
-// FirstUserPrompt returns the first non-empty user turn text.
-func (s Session) FirstUserPrompt() string {
-	for _, t := range s.Turns {
-		if t.Role == "user" && strings.TrimSpace(t.Text) != "" {
-			return t.Text
+// shellNoise are commands that never define a workflow on their own.
+var shellNoise = map[string]bool{
+	"cd": true, "ls": true, "cat": true, "echo": true, "pwd": true, "mkdir": true,
+	"rm": true, "cp": true, "mv": true, "head": true, "tail": true, "sed": true,
+	"awk": true, "grep": true, "rg": true, "find": true, "true": true, "false": true,
+	"sleep": true, "which": true, "test": true, "wc": true, "sort": true, "uniq": true,
+	"touch": true, "printf": true, "export": true, "set": true, "exit": true, "tee": true,
+	"tr": true, "cut": true, "xargs": true, "date": true, "env": true, "sudo": true,
+	"time": true, "nohup": true, "command": true, "builtin": true, "eval": true,
+	"kill": true, "killall": true, "pkill": true, "ps": true, "lsof": true, "open": true,
+	// shell syntax that can lead a segment
+	"for": true, "while": true, "until": true, "if": true, "then": true, "else": true,
+	"elif": true, "fi": true, "do": true, "done": true, "case": true, "esac": true,
+	"function": true, "return": true, "local": true, "declare": true, "source": true,
+	".": true, "{": true, "}": true, "[": true, "[[": true, "!": true,
+}
+
+// shellWrappers precede the real executable and are skipped, flags included.
+var shellWrappers = map[string]bool{
+	"sudo": true, "env": true, "time": true, "nohup": true, "command": true, "exec": true,
+	"builtin": true, "do": true, "then": true, "else": true, "{": true, "!": true, "timeout": true,
+}
+
+// shellAliases folds interpreter/version variants into a family.
+var shellAliases = map[string]string{
+	"python3": "python", "python2": "python", "py": "python",
+	"pip3": "pip", "node.exe": "node", "npx": "npm", "pnpx": "pnpm", "bunx": "bun",
+	"go.exe": "go", "git.exe": "git",
+}
+
+// ShellCommand extracts the leading executable from a shell tool's args.
+// Args may be a JSON object ({"command": "git status"}, {"cmd": [...]}) or a
+// raw command line. Environment assignments, sudo/env/time wrappers, and
+// leading `cd dir &&` hops are skipped. Returns "" when nothing meaningful
+// remains (pure ls/cat/echo pipelines).
+func ShellCommand(args string) string {
+	line := commandLine(args)
+	if line == "" {
+		return ""
+	}
+	// Walk each &&/;/| segment; the first non-noise executable wins.
+	for _, seg := range splitShellSegments(line) {
+		if strings.HasPrefix(strings.TrimSpace(seg), "#") {
+			continue // comment
+		}
+		tok := leadingExecutable(seg)
+		if tok == "" || shellNoise[tok] {
+			continue
+		}
+		return tok
+	}
+	return ""
+}
+
+func commandLine(args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return ""
+	}
+	if !strings.HasPrefix(args, "{") {
+		return args
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(args), &obj) != nil {
+		return ""
+	}
+	for _, key := range []string{"command", "cmd", "script", "commandLine", "command_line"} {
+		switch v := obj[key].(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return v
+			}
+		case []any:
+			var parts []string
+			for _, p := range v {
+				if s, ok := p.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+			if len(parts) > 0 {
+				return strings.Join(parts, " ")
+			}
+		}
+	}
+	if v, ok := obj["args"].([]any); ok {
+		var parts []string
+		for _, p := range v {
+			if s, ok := p.(string); ok {
+				parts = append(parts, s)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, " ")
 		}
 	}
 	return ""
+}
+
+func splitShellSegments(line string) []string {
+	var out []string
+	var cur strings.Builder
+	flush := func() {
+		if s := strings.TrimSpace(cur.String()); s != "" {
+			out = append(out, s)
+		}
+		cur.Reset()
+	}
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case c == '\n' || c == ';':
+			flush()
+		case c == '&' && i+1 < len(line) && line[i+1] == '&':
+			flush()
+			i++
+		case c == '|':
+			flush()
+			if i+1 < len(line) && line[i+1] == '|' {
+				i++
+			}
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return out
+}
+
+func leadingExecutable(seg string) string {
+	fields := strings.Fields(seg)
+	for len(fields) > 0 {
+		tok := strings.Trim(fields[0], `"'`+"`()")
+		// bash -lc "…" / sh -c "…": recurse into the quoted command.
+		if (tok == "bash" || tok == "sh" || tok == "zsh") && len(fields) >= 3 && strings.HasPrefix(fields[1], "-") && strings.Contains(fields[1], "c") {
+			inner := strings.Join(fields[2:], " ")
+			inner = strings.Trim(inner, `"'`)
+			return ShellCommand(inner)
+		}
+		switch {
+		case tok == "":
+			fields = fields[1:]
+		case strings.Contains(tok, "=") && !strings.HasPrefix(tok, "-"):
+			// FOO=bar prefix
+			fields = fields[1:]
+		case shellWrappers[tok]:
+			fields = fields[1:]
+			// skip option flags for wrappers (env -i, sudo -E)
+			for len(fields) > 0 && strings.HasPrefix(fields[0], "-") {
+				fields = fields[1:]
+			}
+		default:
+			tok = strings.ToLower(filepath.Base(tok))
+			if alias, ok := shellAliases[tok]; ok {
+				tok = alias
+			}
+			return tok
+		}
+	}
+	return ""
+}
+
+// ParseSince accepts Go durations (24h, 90m) or day counts (7d).
+func ParseSince(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	if d, err := time.ParseDuration(s); err == nil {
+		return d, nil
+	}
+	if strings.HasSuffix(s, "d") {
+		var days int
+		if _, err := fmt.Sscanf(strings.TrimSuffix(s, "d"), "%d", &days); err == nil && days >= 0 {
+			return time.Duration(days) * 24 * time.Hour, nil
+		}
+	}
+	return 0, fmt.Errorf("invalid since %q (use 24h or 7d)", s)
+}
+
+// MaxPromptBytes bounds the text FirstUserPrompt returns.
+const MaxPromptBytes = 1500
+
+// FirstUserPrompt returns the first user turn that reads as an actual
+// request. Harnesses prepend injected context (AGENTS.md instructions,
+// <environment_context>, <user_info>, …) as user turns; those are stripped or
+// skipped. When a <user_query> wrapper is present, only its body is used.
+func (s Session) FirstUserPrompt() string {
+	for _, t := range s.Turns {
+		if t.Role != "user" {
+			continue
+		}
+		if p := CleanPrompt(t.Text); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+var (
+	userQueryRe  = regexp.MustCompile(`(?s)<user_query>\s*(.*?)\s*</user_query>`)
+	xmlBlockRe   = regexp.MustCompile(`(?s)<([a-z][a-z0-9_-]*)(?:\s[^>]*)?>.*?</[a-z][a-z0-9_-]*>`)
+	xmlOrphanRe  = regexp.MustCompile(`(?s)^\s*<[a-z][a-z0-9_-]*(?:\s[^>]*)?>`)
+	injectedHead = []string{"# agents.md", "<environment_context>", "<user_instructions>", "# claude.md", "<system-reminder>", "<system_reminder>"}
+)
+
+// CleanPrompt strips harness-injected wrappers from a user turn and returns
+// the human request, capped at MaxPromptBytes. Returns "" when nothing
+// human remains.
+func CleanPrompt(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if m := userQueryRe.FindStringSubmatch(text); len(m) > 1 {
+		return capPrompt(m[1])
+	}
+	low := strings.ToLower(text)
+	for _, h := range injectedHead {
+		if strings.HasPrefix(low, h) {
+			return ""
+		}
+	}
+	// Drop <tag>…</tag> blocks (attached files, git status, rules, …).
+	cleaned := xmlBlockRe.ReplaceAllString(text, " ")
+	cleaned = xmlOrphanRe.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return ""
+	}
+	return capPrompt(cleaned)
+}
+
+func capPrompt(p string) string {
+	p = strings.TrimSpace(p)
+	if len(p) > MaxPromptBytes {
+		p = p[:MaxPromptBytes]
+		// don't cut a UTF-8 sequence in half
+		for len(p) > 0 && !utf8.ValidString(p) {
+			p = p[:len(p)-1]
+		}
+	}
+	return p
 }

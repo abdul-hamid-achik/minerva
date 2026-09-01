@@ -82,10 +82,14 @@ func Doctor(env harness.Env) ([]Finding, error) {
 		return nil, err
 	}
 	canonical := map[string]string{}
+	canonicalDir := map[string]string{}
 	for _, s := range mgr.All() {
 		dir := filepath.Dir(s.Path)
 		h, _ := FolderHash(dir)
 		canonical[s.Name] = h
+		if abs, err := filepath.Abs(dir); err == nil {
+			canonicalDir[s.Name] = abs
+		}
 	}
 
 	var out []Finding
@@ -111,7 +115,22 @@ func Doctor(env harness.Env) ([]Finding, error) {
 				out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "extra", Message: "present in harness but not in ~/.agents/skills"})
 				continue
 			}
-			hash, _ := FolderHash(filepath.Join(h.SkillsDir, name))
+			entry := filepath.Join(h.SkillsDir, name)
+			if st, err := os.Lstat(entry); err == nil && st.Mode()&os.ModeSymlink != 0 {
+				// Minerva-owned link: fine when it points at the canonical dir.
+				target, _ := os.Readlink(entry)
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(h.SkillsDir, target)
+				}
+				target = filepath.Clean(target)
+				if _, err := os.Stat(target); err != nil {
+					out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "broken-link", Message: "symlink target missing: " + target})
+				} else if canonicalDir[name] != "" && target != canonicalDir[name] {
+					out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "drift", Message: "symlink points outside ~/.agents/skills: " + target})
+				}
+				continue
+			}
+			hash, _ := FolderHash(entry)
 			if canonical[name] != "" && hash != "" && hash != canonical[name] {
 				out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "drift", Message: "folder hash differs from ~/.agents/skills"})
 			}
@@ -135,7 +154,10 @@ func Doctor(env harness.Env) ([]Finding, error) {
 type SyncOptions struct {
 	To     []string
 	DryRun bool
-	Env    harness.Env
+	// Force replaces a harness-local directory whose contents differ from
+	// the canonical skill. Without it such directories are reported and kept.
+	Force bool
+	Env   harness.Env
 }
 
 // Action is one sync step.
@@ -146,9 +168,27 @@ type Action struct {
 	From    string `json:"from"`
 	To      string `json:"to"`
 	Done    bool   `json:"done"`
+	// Reason explains a skip (or, in dry-run, what would be replaced).
+	Reason string `json:"reason,omitempty"`
 }
 
+// Method values.
+const (
+	MethodSymlink = "symlink"
+	MethodCopy    = "copy"
+	MethodSkip    = "skip"
+)
+
+// ReasonDiverged marks a harness-local directory that Minerva did not write
+// and whose contents differ from ~/.agents/skills.
+const ReasonDiverged = "harness copy differs from ~/.agents/skills; re-run with --force to replace"
+
 // Sync links or copies canonical skills into writable harness dirs.
+//
+// Destinations that are symlinks (Minerva-owned) or byte-identical copies are
+// replaced freely. A real directory with different contents is the harness's
+// own work: it is skipped with ReasonDiverged unless opts.Force. Dry-run
+// touches nothing, not even the harness skills dir.
 func Sync(opts SyncOptions) ([]Action, error) {
 	mgr := skill.ForAgents(opts.Env.AgentsDir)
 	if err := mgr.LoadAll(); err != nil {
@@ -167,17 +207,29 @@ func Sync(opts SyncOptions) ([]Action, error) {
 		if len(want) > 0 && !want[h.ID] {
 			continue
 		}
-		if err := os.MkdirAll(h.SkillsDir, 0o755); err != nil && !opts.DryRun {
-			return nil, err
+		if !opts.DryRun {
+			if err := os.MkdirAll(h.SkillsDir, 0o755); err != nil {
+				return nil, err
+			}
 		}
 		for _, s := range mgr.All() {
 			src := filepath.Dir(s.Path)
 			dst := filepath.Join(h.SkillsDir, s.Name)
-			method := "copy"
+			method := MethodCopy
 			if h.LinkSkills {
-				method = "symlink"
+				method = MethodSymlink
 			}
 			act := Action{Harness: h.ID, Skill: s.Name, Method: method, From: src, To: dst}
+			state := inspectDest(src, dst)
+			if state == destDiverged && !opts.Force {
+				act.Method = MethodSkip
+				act.Reason = ReasonDiverged
+				actions = append(actions, act)
+				continue
+			}
+			if state == destDiverged {
+				act.Reason = "replaced diverged harness copy (--force)"
+			}
 			if opts.DryRun {
 				actions = append(actions, act)
 				continue
@@ -192,15 +244,42 @@ func Sync(opts SyncOptions) ([]Action, error) {
 	return actions, nil
 }
 
+type destState int
+
+const (
+	destAbsent destState = iota
+	destLink
+	destIdentical
+	destDiverged
+)
+
+// inspectDest classifies what is currently at dst relative to src.
+func inspectDest(src, dst string) destState {
+	st, err := os.Lstat(dst)
+	if err != nil {
+		return destAbsent
+	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		return destLink
+	}
+	if !st.IsDir() {
+		return destDiverged // a stray file with the skill's name
+	}
+	want, err1 := FolderHash(src)
+	have, err2 := FolderHash(dst)
+	if err1 != nil || err2 != nil || want != have {
+		return destDiverged
+	}
+	return destIdentical
+}
+
 func place(src, dst, method string) error {
-	if st, err := os.Lstat(dst); err == nil {
-		if st.Mode()&os.ModeSymlink != 0 || method == "symlink" {
-			_ = os.RemoveAll(dst)
-		} else {
-			_ = os.RemoveAll(dst)
+	if _, err := os.Lstat(dst); err == nil {
+		if err := os.RemoveAll(dst); err != nil {
+			return err
 		}
 	}
-	if method == "symlink" {
+	if method == MethodSymlink {
 		abs, err := filepath.Abs(src)
 		if err != nil {
 			return err
@@ -248,8 +327,11 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// Install clones a GitHub repo (or owner/repo/path) into ~/.agents/skills and updates the lock file.
-func Install(agentsDir, spec string) (string, error) {
+// Install clones a GitHub repo (or owner/repo/path) into ~/.agents/skills and
+// updates the lock file. When the repo holds several SKILL.md files and no
+// path narrows the choice, Install fails and lists them. An existing local
+// skill that the lock file does not know about is never replaced unless force.
+func Install(agentsDir, spec string, force bool) (string, error) {
 	spec = strings.TrimSpace(spec)
 	spec = strings.TrimPrefix(spec, "https://github.com/")
 	spec = strings.TrimSuffix(spec, ".git")
@@ -277,23 +359,34 @@ func Install(agentsDir, spec string) (string, error) {
 	if sub != "" {
 		search = filepath.Join(tmp, sub)
 	}
-	skillRoot, name, skillMD, err := findSkill(search)
+	skillRoot, name, skillMD, err := findSkill(search, tmp)
+	if err != nil {
+		return "", err
+	}
+	lf, err := LoadLock(agentsDir)
 	if err != nil {
 		return "", err
 	}
 	dest := filepath.Join(agentsDir, "skills", name)
+	if _, statErr := os.Lstat(dest); statErr == nil {
+		if _, tracked := lf.Skills[name]; !tracked && !force {
+			return "", fmt.Errorf("skill %q already exists in %s and is not in .skill-lock.json; delete it or re-run with --force", name, filepath.Dir(dest))
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	_ = os.RemoveAll(dest)
+	if err := os.RemoveAll(dest); err != nil {
+		return "", err
+	}
 	if err := copyDir(skillRoot, dest); err != nil {
 		return "", err
 	}
 	hash, _ := FolderHash(dest)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	lf, err := LoadLock(agentsDir)
-	if err != nil {
-		return "", err
+	installedAt := now
+	if prev, ok := lf.Skills[name]; ok && prev.InstalledAt != "" {
+		installedAt = prev.InstalledAt // re-install keeps the original date
 	}
 	rel := skillMD
 	if relPath, err := filepath.Rel(tmp, skillMD); err == nil {
@@ -301,7 +394,7 @@ func Install(agentsDir, spec string) (string, error) {
 	}
 	lf.Skills[name] = LockEntry{
 		Source: owner + "/" + repo, SourceType: "github", SourceURL: url,
-		SkillPath: rel, SkillFolderHash: hash, InstalledAt: now, UpdatedAt: now,
+		SkillPath: rel, SkillFolderHash: hash, InstalledAt: installedAt, UpdatedAt: now,
 	}
 	if err := saveLock(agentsDir, lf); err != nil {
 		return "", err
@@ -309,14 +402,21 @@ func Install(agentsDir, spec string) (string, error) {
 	return name, nil
 }
 
-func findSkill(root string) (folder, name, skillMD string, err error) {
+// findSkill locates exactly one SKILL.md under root. repoRoot is used to
+// render candidate paths when the choice is ambiguous.
+func findSkill(root, repoRoot string) (folder, name, skillMD string, err error) {
 	var found []string
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() {
+		if walkErr != nil {
 			return nil
 		}
-		base := strings.ToLower(info.Name())
-		if base == "skill.md" {
+		if info.IsDir() {
+			if base := info.Name(); path != root && (base == ".git" || base == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.ToLower(info.Name()) == "skill.md" {
 			found = append(found, path)
 		}
 		return nil
@@ -325,6 +425,17 @@ func findSkill(root string) (folder, name, skillMD string, err error) {
 		return "", "", "", fmt.Errorf("no SKILL.md under %s", root)
 	}
 	sort.Strings(found)
+	if len(found) > 1 {
+		var rels []string
+		for _, p := range found {
+			rel := filepath.Dir(p)
+			if r, err := filepath.Rel(repoRoot, rel); err == nil {
+				rel = r
+			}
+			rels = append(rels, "  owner/repo/"+filepath.ToSlash(rel))
+		}
+		return "", "", "", fmt.Errorf("%d skills found; pick one by path:\n%s", len(found), strings.Join(rels, "\n"))
+	}
 	skillMD = found[0]
 	folder = filepath.Dir(skillMD)
 	name = filepath.Base(folder)

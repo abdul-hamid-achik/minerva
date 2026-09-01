@@ -7,10 +7,27 @@ into a ranked list. The last run is stored at
 | Kind | Meaning | Apply? |
 |------|---------|--------|
 | `new_skill` | Draft a SKILL.md from a repeated pattern | yes |
-| `update_skill` | Append an observed pattern to an existing skill | yes |
+| `update_skill` | Merge an observed pattern into an existing skill's `## Observed patterns` section | yes, idempotent |
 | `load_gap` | Catalog skill matched the prompt but was not loaded | no — load it in the harness |
 
 Each proposal has a stable `id` (`kind` + hash of the skill name).
+
+Proposals come from `shell_family`, `repeat_sequence`, `retry_loop`, and
+`load_gap` signals. Names are derived from the anchor: `git-workflow`,
+`go-strreplace-loop`, `bash-retry`. `user_correction` and `long_manual` show
+up in `analyze` only.
+
+## Applying an update
+
+```markdown
+## Observed patterns
+
+- repeated shell family git (11 sessions; last cursor 6d2fd597)
+- retry after error: Bash (2 sessions; last codex 01a0466f)
+```
+
+Minerva owns that section and nothing else. A legacy `## Observed later`
+paragraph from earlier releases is folded into it on the next apply.
 
 ```bash
 minerva propose --since 30d --json

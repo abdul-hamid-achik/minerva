@@ -13,6 +13,7 @@ import (
 
 	"github.com/abdul-hamid-achik/minerva/internal/harness"
 	"github.com/abdul-hamid-achik/minerva/internal/learn"
+	"github.com/abdul-hamid-achik/minerva/internal/session"
 	"github.com/abdul-hamid-achik/minerva/internal/skill"
 	"github.com/abdul-hamid-achik/minerva/internal/version"
 )
@@ -124,22 +125,11 @@ func printJSON(v any) error {
 }
 
 func parseSince(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, nil
+	d, err := session.ParseSince(s)
+	if err != nil {
+		return 0, fmt.Errorf("--since: %w", err)
 	}
-	if d, err := time.ParseDuration(s); err == nil {
-		return d, nil
-	}
-	// allow 7d
-	if strings.HasSuffix(s, "d") {
-		n := strings.TrimSuffix(s, "d")
-		var days int
-		if _, err := fmt.Sscanf(n, "%d", &days); err == nil {
-			return time.Duration(days) * 24 * time.Hour, nil
-		}
-	}
-	return 0, fmt.Errorf("invalid --since %q (use 24h or 7d)", s)
+	return d, nil
 }
 
 func splitCSV(s string) []string {
