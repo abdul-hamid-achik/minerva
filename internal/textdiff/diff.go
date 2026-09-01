@@ -1,4 +1,4 @@
-// Package textdiff provides a small unified-diff implementation for skill/profile compare.
+// Package textdiff provides a small unified-diff implementation for skill compare.
 package textdiff
 
 import (

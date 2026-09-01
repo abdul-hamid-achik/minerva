@@ -10,9 +10,9 @@
   <path d="m934 293 38 57 38-57M972 289v61" stroke="#C66843" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="972" cy="350" r="6" fill="#F3F0E8"/>
   <path d="M76 106h45" stroke="#C66843" stroke-width="3"/>
-  <text x="135" y="112" fill="#D98B6B" font-family="monospace" font-size="18" letter-spacing="4">MINERVA · AGENT LIBRARY OPERATOR</text>
-  <text x="76" y="236" fill="#F3F0E8" font-family="Arial, sans-serif" font-size="74" font-weight="700" letter-spacing="-4">Know when your agent</text>
-  <text x="76" y="316" fill="#F3F0E8" font-family="Arial, sans-serif" font-size="74" font-weight="700" letter-spacing="-4">stack is actually ready.</text>
-  <text x="80" y="404" fill="#AEB1AA" font-family="Arial, sans-serif" font-size="25">Skills, profiles, retrieval health, and evidence-backed next actions.</text>
+  <text x="135" y="112" fill="#D98B6B" font-family="monospace" font-size="18" letter-spacing="4">MINERVA · SKILL INTELLIGENCE</text>
+  <text x="76" y="236" fill="#F3F0E8" font-family="Arial, sans-serif" font-size="74" font-weight="700" letter-spacing="-4">Read the session.</text>
+  <text x="76" y="316" fill="#F3F0E8" font-family="Arial, sans-serif" font-size="74" font-weight="700" letter-spacing="-4">Propose the skill.</text>
+  <text x="80" y="404" fill="#AEB1AA" font-family="Arial, sans-serif" font-size="25">Parse harness traces, draft SKILL.md files, and keep libraries in sync.</text>
   <text x="80" y="516" fill="#F3F0E8" font-family="monospace" font-size="18" letter-spacing="2">MINERVACLI.DEV</text>
 </svg>

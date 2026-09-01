@@ -5,16 +5,7 @@ import (
 	"fmt"
 )
 
-// Exit code conventions for stack gates (CI / harness preflight):
-//
-//	0 — success (core healthy; retrieval ready when required)
-//	1 — core stack incomplete / unhealthy
-//	2 — core healthy but degraded (optional tools missing); only with --strict
-//	3 — retrieval not ready (only with stack deep --require-retrieval)
-//
-// Other command failures still exit 1 via the default error path.
-
-// ExitCode is a process exit status returned after successful output.
+// Exit codes: 0 ok, 1 command or lint error.
 type ExitCode int
 
 func (e ExitCode) Error() string {

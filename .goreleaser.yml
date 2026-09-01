@@ -61,7 +61,7 @@ homebrew_casks:
       token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
     directory: Casks
     homepage: https://minervacli.dev
-    description: Agent library operator and stack readiness CLI/MCP
+    description: Skill intelligence for agent harnesses — propose SKILL.md from session traces and sync libraries
     license: MIT
     commit_msg_template: 'chore: update Minerva to {{ .Tag }}'
     hooks:
@@ -70,5 +70,5 @@ homebrew_casks:
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/minerva"]
           end
-    caveats: 'Run `minerva init` to create the shared agent library, then `minerva stack deep` for an evidence-backed readiness report.'
+    caveats: 'Run `minerva init` to create ~/.agents/skills, then `minerva propose` to draft skills from harness sessions.'
     skip_upload: '{{ if .Env.HOMEBREW_TAP_TOKEN }}false{{ else }}true{{ end }}'

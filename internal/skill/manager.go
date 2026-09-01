@@ -1,12 +1,8 @@
-// Package skill manages agent skills in the ~/.agents/skills directory.
-// Skills are markdown files with YAML frontmatter that provide specialized
-// instructions to coding agents. Minerva can create, list, activate,
-// deactivate, and load skills.
+// Package skill manages Agent Skills (SKILL.md) under ~/.agents/skills.
 package skill
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,16 +21,13 @@ const (
 	MaxSkillBodyBytes        = 1 << 20 // 1 MiB
 	MaxSkillNameBytes        = 128
 	MaxSkillDescriptionBytes = 4096
-	// LintDescriptionWarnBytes is when a long Agent Skills "Use when" blurb is noisy, not invalid.
 	LintDescriptionWarnBytes = 2048
-	stateFileName            = ".minerva-skills.json"
 )
 
-// Skill represents a loadable skill definition.
+// Skill is a loadable skill definition.
 type Skill struct {
 	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description" json:"description"`
-	Active      bool   `yaml:"-" json:"active"`
 	Content     string `yaml:"-" json:"-"`
 	Path        string `yaml:"-" json:"path"`
 }
@@ -43,15 +36,13 @@ type Skill struct {
 type CatalogEntry struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Active      bool   `json:"active"`
 }
 
-// Manager handles skill discovery, loading, and activation.
+// Manager handles skill discovery, loading, and CRUD.
 type Manager struct {
-	mu        sync.RWMutex
-	skills    []*Skill
-	dirs      []string
-	statePath string
+	mu     sync.RWMutex
+	skills []*Skill
+	dirs   []string
 }
 
 // NewManager creates a skill manager for explicit search directories.
@@ -59,12 +50,18 @@ func NewManager(dirs ...string) *Manager {
 	return &Manager{dirs: dirs}
 }
 
-// NewManagerWithState creates a skill manager that persists activation state.
-func NewManagerWithState(stateDir string, dirs ...string) *Manager {
-	return &Manager{
-		dirs:      dirs,
-		statePath: filepath.Join(stateDir, stateFileName),
+// ForAgents discovers skills under agentsDir/skills.
+func ForAgents(agentsDir string) *Manager {
+	return NewManager(filepath.Join(agentsDir, "skills"))
+}
+
+// NewManagerWithState is kept for callers that pass an agents root plus skills dir.
+// The state file is no longer used.
+func NewManagerWithState(agentsDir string, dirs ...string) *Manager {
+	if len(dirs) > 0 {
+		return NewManager(dirs...)
 	}
+	return ForAgents(agentsDir)
 }
 
 // AddSearchPath adds a directory to search for skills.
@@ -79,7 +76,7 @@ func (m *Manager) AddSearchPath(dir string) {
 	m.dirs = append(m.dirs, dir)
 }
 
-// LoadAll discovers and loads all .md skill files from the skills directories.
+// LoadAll discovers and loads all skill files from the search directories.
 func (m *Manager) LoadAll() error {
 	m.mu.RLock()
 	dirs := append([]string(nil), m.dirs...)
@@ -104,53 +101,10 @@ func (m *Manager) LoadAll() error {
 		return discovered[i].Name < discovered[j].Name
 	})
 
-	// Load persisted activation state.
-	activeSet := m.loadState()
-
 	m.mu.Lock()
-	for _, candidate := range discovered {
-		candidate.Active = activeSet[candidate.Name]
-	}
 	m.skills = discovered
 	m.mu.Unlock()
 	return nil
-}
-
-func (m *Manager) loadState() map[string]bool {
-	if m.statePath == "" {
-		return nil
-	}
-	data, err := os.ReadFile(m.statePath)
-	if err != nil {
-		return nil
-	}
-	var active []string
-	if err := json.Unmarshal(data, &active); err != nil {
-		return nil
-	}
-	set := make(map[string]bool, len(active))
-	for _, name := range active {
-		set[name] = true
-	}
-	return set
-}
-
-func (m *Manager) saveState() {
-	if m.statePath == "" {
-		return
-	}
-	active := make([]string, 0)
-	for _, s := range m.skills {
-		if s.Active {
-			active = append(active, s.Name)
-		}
-	}
-	sort.Strings(active)
-	data, err := json.Marshal(active) // empty slice → [] not null
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(m.statePath, data, 0o644)
 }
 
 func loadSkillsFromDir(dir string) ([]*Skill, error) {
@@ -346,7 +300,6 @@ func (m *Manager) Catalog() []CatalogEntry {
 		result = append(result, CatalogEntry{
 			Name:        s.Name,
 			Description: s.Description,
-			Active:      s.Active,
 		})
 	}
 	return result
@@ -364,6 +317,19 @@ func (m *Manager) Load(name string) (string, bool) {
 	return "", false
 }
 
+// Get returns a skill by name.
+func (m *Manager) Get(name string) *Skill {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, s := range m.skills {
+		if s.Name == name {
+			copy := *s
+			return &copy
+		}
+	}
+	return nil
+}
+
 // Has reports whether a skill name is available.
 func (m *Manager) Has(name string) bool {
 	m.mu.RLock()
@@ -374,59 +340,6 @@ func (m *Manager) Has(name string) bool {
 		}
 	}
 	return false
-}
-
-// IsActive reports whether a skill is currently active.
-func (m *Manager) IsActive(name string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, s := range m.skills {
-		if s.Name == name {
-			return s.Active
-		}
-	}
-	return false
-}
-
-// Activate enables a skill by name and persists the state.
-func (m *Manager) Activate(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, s := range m.skills {
-		if s.Name == name {
-			s.Active = true
-			m.saveState()
-			return nil
-		}
-	}
-	return fmt.Errorf("skill not found: %s", name)
-}
-
-// Deactivate disables a skill by name and persists the state.
-func (m *Manager) Deactivate(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, s := range m.skills {
-		if s.Name == name {
-			s.Active = false
-			m.saveState()
-			return nil
-		}
-	}
-	return fmt.Errorf("skill not found: %s", name)
-}
-
-// ActiveContent returns the combined markdown content of all active skills.
-func (m *Manager) ActiveContent() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var parts []string
-	for _, s := range m.skills {
-		if s.Active && s.Content != "" {
-			parts = append(parts, fmt.Sprintf("### %s\n%s", s.Name, s.Content))
-		}
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 // Create creates a new skill file in the given directory.
@@ -452,8 +365,6 @@ func (m *Manager) Create(dir, name, description, content string) error {
 }
 
 // Update rewrites an existing skill's description and/or body.
-// Empty description or content arguments keep the current value when
-// updateDescription/updateContent are false.
 func (m *Manager) Update(name string, description *string, content *string) error {
 	if err := validateSkillName(name); err != nil {
 		return fmt.Errorf("invalid skill name: %w", err)
@@ -505,7 +416,6 @@ func (m *Manager) Update(name string, description *string, content *string) erro
 func writeSkillFile(path, name, description, content string) error {
 	var b strings.Builder
 	b.WriteString("---\n")
-	// Quote scalars so descriptions with ":" or newlines cannot break YAML.
 	fmt.Fprintf(&b, "name: %q\n", name)
 	if description != "" {
 		fmt.Fprintf(&b, "description: %q\n", description)
@@ -519,6 +429,11 @@ func writeSkillFile(path, name, description, content string) error {
 		return fmt.Errorf("write skill file: %w", err)
 	}
 	return nil
+}
+
+// WriteSkillFile writes a SKILL.md with quoted frontmatter (exported for propose/sync).
+func WriteSkillFile(path, name, description, content string) error {
+	return writeSkillFile(path, name, description, content)
 }
 
 // Delete removes a skill directory.

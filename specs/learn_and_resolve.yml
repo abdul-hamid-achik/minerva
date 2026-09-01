@@ -23,7 +23,6 @@ preconditions:
             ./bin/minerva init
             ./bin/minerva skill create qa-tester "body" -d "Use when writing test plans"
             ./bin/minerva skill create doc-writer "body" -d "Use when writing READMEs and documentation"
-            ./bin/minerva profile create dev "you are dev" --kind workspace -s qa-tester
           cwd: "."
           timeoutMs: 90000
 steps:

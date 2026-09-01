@@ -1,59 +1,40 @@
 // Package learn builds a one-page onboarding brief for agents and operators.
 package learn
 
-import (
-	"github.com/abdul-hamid-achik/minerva/internal/profile"
-	"github.com/abdul-hamid-achik/minerva/internal/skill"
-	"github.com/abdul-hamid-achik/minerva/internal/suggest"
-	"github.com/abdul-hamid-achik/minerva/internal/surface"
-)
+import "github.com/abdul-hamid-achik/minerva/internal/surface"
 
 // Brief is the stable learn --json payload.
 type Brief struct {
-	Thesis     string                `json:"thesis"`
-	Activation string                `json:"activation"`
-	Commands   []string              `json:"commands"`
-	ExitCodes  map[string]string     `json:"exit_codes"`
-	Tools      []surface.ProductTool `json:"tools"`
-	Next       []suggest.Suggestion  `json:"next,omitempty"`
+	Thesis    string                `json:"thesis"`
+	How       string                `json:"how"`
+	Commands  []string              `json:"commands"`
+	ExitCodes map[string]string     `json:"exit_codes"`
+	Tools     []surface.ProductTool `json:"tools"`
 }
 
-const thesis = "Minerva is the agent library operator for ~/.agents and a stack readiness orchestrator. It is not a second agent runtime, not Cortex, and not MCPHub."
+const thesis = "Minerva reads agent-harness conversations and tool calls, proposes skills from those traces, and keeps SKILL.md libraries in sync across harnesses. It is not a second agent runtime, not Cortex, and not a stack monitor."
 
-const activation = "minerva skill activate only flips ~/.agents/.minerva-skills.json. Harnesses (sonar, local-agent) do not read that file. Put skills on a profile (minerva profile add-skills) for durable loading; use the harness load_skill for one-shot session bodies."
+const how = "Point Minerva at Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini, or sonar session files. Analyze extracts deterministic signals (retries, corrections, load-gaps). Propose writes SKILL.md drafts. Sync links the canonical ~/.agents/skills tree into each writable harness."
 
-// Build returns a cheap onboarding brief. It does not run deep stack probes.
-func Build(skillMgr *skill.Manager, profileMgr *profile.Manager, workspace string) Brief {
-	var next []suggest.Suggestion
-	if skillMgr != nil && profileMgr != nil {
-		engine := suggest.NewEngine(skillMgr, profileMgr, nil, workspace)
-		engine.IncludeReadiness = false
-		engine.IncludeEvidence = false
-		all := engine.Analyze()
-		if len(all) > 5 {
-			all = all[:5]
-		}
-		next = all
-	}
+// Build returns a cheap onboarding brief.
+func Build() Brief {
 	return Brief{
-		Thesis:     thesis,
-		Activation: activation,
+		Thesis: thesis,
+		How:    how,
 		Commands: []string{
 			"minerva learn --json",
+			"minerva harness list",
+			"minerva sessions --since 7d --json",
+			"minerva analyze --last --json",
+			"minerva propose --since 30d --json",
+			"minerva propose apply <id>",
 			"minerva skill resolve \"<intent>\" --json",
-			"minerva status --json",
-			"minerva suggest --json",
-			"minerva library lint --json",
-			"minerva stack check --json",
-			"minerva profile add-skills <profile> <skill>",
+			"minerva skill sync --dry-run",
 		},
 		ExitCodes: map[string]string{
-			"0": "healthy / ok",
-			"1": "unhealthy (core binaries missing) or lint errors",
-			"2": "degraded optional stack (stack check --strict)",
-			"3": "retrieval not ready (status/stack deep --require-retrieval)",
+			"0": "ok",
+			"1": "error (lint failures, missing proposal, command error)",
 		},
 		Tools: surface.ProductTools(),
-		Next:  next,
 	}
 }

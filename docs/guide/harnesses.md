@@ -1,0 +1,25 @@
+# Harnesses
+
+Minerva discovers sessions by globbing well-known paths under `$MINERVA_HOME`
+(default `$HOME`).
+
+| Id | Skills dir | Sessions | Sync |
+|----|------------|----------|------|
+| `claude` | `~/.claude/skills` | `~/.claude/projects/*/*.jsonl` | symlink |
+| `codex` | `~/.codex/skills` | `~/.codex/sessions/**/*.jsonl` | symlink |
+| `cursor` | `~/.cursor/skills-cursor` | `…/agent-transcripts/*/*.jsonl` | **read-only** |
+| `opencode` | `~/.config/opencode/skills` | `~/.local/share/opencode/storage/session/*/*.json` | copy/link |
+| `copilot` | `~/.copilot/skills` | `~/.copilot/session-state/*` | copy/link |
+| `gemini` | `~/.gemini/skills` | `~/.gemini/antigravity/conversations/*` | copy/link |
+| `sonar` | `~/.agents/skills` | `~/.sonar/logs`, `sonar.db` | skip |
+
+## Formats
+
+- **Claude Code** — JSONL with `type` + `message.content[]` (`tool_use`, `Skill`).
+- **Cursor** — JSONL `{role, message.content[]}` with `tool_use`.
+- **Codex** — JSONL `session_meta` / `response_item` / `event_msg` (`function_call`, `mcp_tool_call_end`).
+- **OpenCode** — session JSON plus `storage/message/<id>` and `storage/part/<msg>` tool/text parts.
+- **GitHub Copilot** — `session-state/<id>/events.jsonl` (`user.message`, `tool.execution_*`) and `workspace.yaml`.
+- **Gemini / sonar** — listed when files exist; Gemini conversations are protobuf and are not fully decoded.
+
+Unknown line types are ignored. A single corrupt line never fails the file.

@@ -2,78 +2,63 @@
 
 ## Product thesis
 
-> Minerva is the **agent library operator** and **stack readiness orchestrator** for the shared `~/.agents` tree. It is not a second agent runtime.
+> Minerva reads agent-harness conversations and tool calls, proposes skills
+> from those traces, and keeps `SKILL.md` libraries in sync. It is not a
+> second agent runtime.
 
-## Shared vs private state
+## Canonical vs harness-local
 
-### Shared (local-agent consumes)
-
-| Path | Role |
-|------|------|
-| `~/.agents/skills/*/SKILL.md` | Skill bodies + frontmatter |
-| `~/.agents/agents/*/agent.yaml` | Profiles: model, skills, mcp_servers, system_prompt |
-| `agents.md` / `instructions.md` | Global instructions (if present) |
-
-### Minerva-local (not read by local-agent)
+### Canonical (Minerva writes)
 
 | Path | Role |
 |------|------|
-| `~/.agents/.minerva-skills.json` | Activation flags for Minerva catalog only |
-| `~/.agents/.minerva-analytics.json` | Append-safe usage events |
+| `~/.agents/skills/*/SKILL.md` | Skill bodies + Agent Skills frontmatter |
+| `~/.agents/.skill-lock.json` | Optional install lock (GitHub source + hash) |
+| `~/.agents/.minerva/proposals.json` | Last `propose` run (Minerva-local) |
 
-## Activation honesty
+### Harness-local (Minerva reads, sometimes links)
 
-| Action | Effect |
-|--------|--------|
-| `minerva skill activate` | Flips Minerva state file only |
-| `minerva profile add-skills` | Updates shared `agent.yaml` (local-agent SSOT) |
-| local-agent profile apply | Activates profile skills **in session** |
-| local-agent `load_skill` | One-shot body, does not flip Active |
+| Path | Role |
+|------|------|
+| `~/.claude/skills` | Claude Code skills (symlink-safe) |
+| `~/.codex/skills` | Codex skills (symlink-safe) |
+| `~/.cursor/skills-cursor` | Cursor-owned — never overwritten |
+| `~/.claude/projects/**/*.jsonl` | Claude transcripts |
+| `~/.codex/sessions/**/*.jsonl` | Codex rollouts |
+| `~/.cursor/projects/**/agent-transcripts/**/*.jsonl` | Cursor transcripts |
 
-For durable behavior: **put skills on a profile**, then start the harness (sonar or local-agent) with that profile.
+## Trace model
 
-Profiles may set `kind: workspace` or `kind: role`. Names `default`, `dev`, and `workspace` infer workspace. Role profiles do not receive workspace skill suggestions.
-
-## Suggest philosophy
-
-Suggestions are **proposals**:
-
-- ranked by priority  
-- include exact CLI next actions when possible  
-- prefer **profile membership** over Minerva-local activate  
-- `--apply` runs allowlisted `minerva profile add-skills …`  
-- `--apply-local` also allows `minerva skill activate <name>`  
-- never mutates Cortex tasks or MCPHub configs automatically  
-
-## Evidence philosophy
-
-Outcomes live in **fcheap**, not a second vault:
+Every adapter maps a harness file onto:
 
 ```text
-tags: minerva, minerva-eval|stack|…, outcome:pass|fail, skill:name, profile:name
+Session { harness, id, workspace, turns[] }
+Turn    { role, text, tool_calls[], skills_invoked[] }
+ToolCall { name, args, result, is_error, category }
 ```
 
-Suggest can then say “skill X appears in N failed stashes” instead of guessing.
+Categories: `shell`, `read`, `edit`, `search`, `mcp`, `subagent`, `skill`, `other`.
 
-## Templates (builtin + disk)
+## Signals
 
-| Layer | Location |
-|-------|----------|
-| Builtin | Embedded in the Minerva binary |
-| Disk | `~/.agents/templates/<name>/template.yaml` |
+Deterministic — no LLM required:
 
-Disk templates **override** builtins with the same name. Use `minerva template install <name>` to copy a builtin for editing, or `template save` for new roles.
+| Signal | Meaning |
+|--------|---------|
+| `repeat_sequence` | The same 3-tool n-gram appears more than once |
+| `retry_loop` | Same tool after an error |
+| `user_correction` | User asked to redo / “no, the other way” |
+| `load_gap` | Catalog skill matched the prompt but was not invoked |
+| `long_manual` | Many tool calls, zero skills loaded |
+| `shell_family` | Repeated `git` / `go` / `npm` / … |
 
-## Library portability
+## Propose, then apply
 
-```bash
-minerva library export ./team-lib.tgz
-minerva library import ./team-lib.tgz --force
-minerva library lint
-```
+`minerva propose` ranks drafts and saves them. `minerva propose apply <id>`
+(or MCP `minerva_apply`) writes a `SKILL.md`. Load-gap proposals are not
+applyable — they tell the harness to load an existing skill.
 
-Bundles include skills, profiles, and templates — not Minerva-local analytics/activation state.
+## Privacy
 
-## Bridge to local-agent
-
-`minerva bridge show <profile>` prints launch examples and **exact** MCP trust routes. Minerva never starts the harness; it documents how the shared disk SSOT is consumed.
+Transcripts stay on disk. MCP handlers redact secret-like strings before
+returning text. Minerva does not upload sessions.

@@ -1,6 +1,5 @@
-// Command minerva is an agent self-improvement CLI and MCP tool.
-// It manages skills, agent profiles, system prompts, and monitors
-// the intelligence stack (bob, cortex, mcphub, codemap, vecgrep, etc.).
+// Command minerva is a CLI and MCP server that reads agent-harness
+// conversations, proposes skills, and syncs SKILL.md libraries.
 package main
 
 import (

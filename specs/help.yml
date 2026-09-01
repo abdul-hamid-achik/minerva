@@ -2,7 +2,7 @@ version: 1
 name: minerva_help
 intent: |
     operators can run minerva -h and discover the public command surface
-    for library management, stack readiness, evidence, and suggestions.
+    for sessions, proposals, skills, and harness sync.
 target:
     cmd: ["./bin/minerva", "-h"]
     cwd: "."
@@ -31,25 +31,21 @@ outcomes:
         screen:
             contains: "Available Commands:"
     - id: core_commands_documented
-      description: help lists skill, profile, stack, status, library, bridge, suggest, learn, evidence, mcp, template
+      description: help lists skill, harness, sessions, analyze, propose, learn, mcp
       verify:
         command:
             run: |
                 output="$(./bin/minerva -h 2>&1)"
                 printf '%s\n' "$output" | grep -qE -- 'skill'
-                printf '%s\n' "$output" | grep -qE -- 'profile'
-                printf '%s\n' "$output" | grep -qE -- 'stack'
-                printf '%s\n' "$output" | grep -qE -- 'status'
-                printf '%s\n' "$output" | grep -qE -- 'library'
-                printf '%s\n' "$output" | grep -qE -- 'bridge'
-                printf '%s\n' "$output" | grep -qE -- 'suggest'
+                printf '%s\n' "$output" | grep -qE -- 'harness'
+                printf '%s\n' "$output" | grep -qE -- 'sessions'
+                printf '%s\n' "$output" | grep -qE -- 'analyze'
+                printf '%s\n' "$output" | grep -qE -- 'propose'
                 printf '%s\n' "$output" | grep -qE -- 'learn'
-                printf '%s\n' "$output" | grep -qE -- 'evidence'
                 printf '%s\n' "$output" | grep -qE -- 'mcp'
-                printf '%s\n' "$output" | grep -qE -- 'template'
     - id: exits_zero
       description: help exits successfully
       verify:
         process:
             exitCode: 0
-contractHash: sha256:344d39571159305aea3a04af67ce9f48396d404e3bfdf1424e0dc01811dad6ae
+contractHash: sha256:cfc677f384b4cf271f77e6aeae3e5294da9c55a694fe650ea57532415cfcefc0

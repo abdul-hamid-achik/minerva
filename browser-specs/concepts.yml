@@ -12,7 +12,7 @@ outcomes:
       text:
         contains: Concepts
   - id: activation_honesty
-    description: page explains Minerva-local activation
+    description: page explains Minerva-local proposal store
     verify:
       text:
         contains: Minerva-local

@@ -1,0 +1,59 @@
+version: 1
+name: minerva_harness_and_propose
+intent: |
+    operators can list harnesses and run propose against an isolated home
+    that contains a Claude-style transcript fixture.
+target:
+    cmd: ["./bin/minerva", "harness", "list"]
+    cwd: "."
+    env:
+        MINERVA_AGENTS_DIR: "${projectRoot}/.glyphrun/tmp/propose-agents"
+        MINERVA_HOME: "${projectRoot}/.glyphrun/tmp/propose-home"
+terminal:
+    cols: 120
+    rows: 40
+    profile: xterm-256color
+preconditions:
+    commands:
+        - run: |
+            set -e
+            go build -o ./bin/minerva ./cmd/minerva
+            HOME_DIR="$PWD/.glyphrun/tmp/propose-home"
+            ROOT="$PWD/.glyphrun/tmp/propose-agents"
+            rm -rf "$HOME_DIR" "$ROOT"
+            mkdir -p "$HOME_DIR/.claude/projects/demo"
+            mkdir -p "$ROOT"
+            export MINERVA_HOME="$HOME_DIR"
+            export MINERVA_AGENTS_DIR="$ROOT"
+            ./bin/minerva init
+            ./bin/minerva skill create doc-writer "docs body" -d "Use when writing or editing READMEs and API docs"
+            cp internal/session/testdata/claude.jsonl "$HOME_DIR/.claude/projects/demo/sess.jsonl"
+          cwd: "."
+          timeoutMs: 90000
+steps:
+    - wait:
+        screen:
+            contains: "claude"
+        timeoutMs: 10000
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 5000
+outcomes:
+    - id: harness_lists_claude
+      description: harness list mentions claude
+      verify:
+        screen:
+            contains: "claude"
+    - id: propose_json_runs
+      description: propose --json returns a proposals array
+      verify:
+        command:
+            run: |
+                MINERVA_HOME="$PWD/.glyphrun/tmp/propose-home" MINERVA_AGENTS_DIR="$PWD/.glyphrun/tmp/propose-agents" ./bin/minerva propose --since 3650d --json | grep -q '"proposals"'
+    - id: exits_zero
+      description: harness list exits successfully
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:4f45c8c0ff3f087c260e3ab7f7ffbe04fcb6d8a3a6878177dd936839ce583ec4

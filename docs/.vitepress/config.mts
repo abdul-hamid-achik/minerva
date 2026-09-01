@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 const siteURL = 'https://minervacli.dev'
 const repositoryURL = 'https://github.com/abdul-hamid-achik/minerva'
 const defaultDescription =
-  'Minerva is the agent library operator and stack readiness CLI/MCP for skills, profiles, and honest intelligence-stack health.'
+  'Minerva reads agent-harness conversations and tool calls, proposes SKILL.md files, and syncs skills across Claude Code, Codex, Cursor, and other harnesses.'
 
 const structuredData = JSON.stringify({
   '@context': 'https://schema.org',
@@ -36,11 +36,10 @@ const structuredData = JSON.stringify({
         priceCurrency: 'USD',
       },
       featureList: [
-        'Skill and profile management for ~/.agents',
-        'Tiered stack presence with correct binary names',
-        'Fail-closed retrieval readiness (codemap + vecgrep)',
-        'MCPHub and Cortex operator intelligence',
-        'fcheap evidence tags for closed-loop suggestions',
+        'Parse Claude Code, Codex, Cursor, OpenCode, and Copilot transcripts',
+        'Propose skills from tool-call signals',
+        'Canonical ~/.agents/skills library',
+        'Cross-harness skill sync and doctor',
         'MCP server for agent harnesses',
       ],
     },
@@ -77,7 +76,7 @@ export default defineConfig({
       { text: 'Start', link: '/guide/getting-started' },
       { text: 'Concepts', link: '/guide/concepts' },
       { text: 'CLI', link: '/guide/cli' },
-      { text: 'Stack readiness', link: '/guide/stack' },
+      { text: 'Harnesses', link: '/guide/harnesses' },
       {
         text: 'GitHub',
         link: repositoryURL,
@@ -96,10 +95,9 @@ export default defineConfig({
           text: 'Operate',
           items: [
             { text: 'CLI reference', link: '/guide/cli' },
-            { text: 'Stack readiness', link: '/guide/stack' },
-            { text: 'Evidence & fcheap', link: '/guide/evidence' },
+            { text: 'Harnesses', link: '/guide/harnesses' },
+            { text: 'Proposals', link: '/guide/proposals' },
             { text: 'MCP integration', link: '/guide/mcp' },
-            { text: 'Session-native loop', link: '/guide/session-native' },
           ],
         },
         {
@@ -115,7 +113,7 @@ export default defineConfig({
       { icon: 'github', link: repositoryURL },
     ],
     footer: {
-      message: 'Know what is installed. Know what is ready. Act on evidence.',
+      message: 'Read the session. Propose the skill. Keep harnesses in sync.',
       copyright: 'Minerva · Open source under MIT',
     },
     search: {

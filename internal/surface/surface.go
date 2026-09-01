@@ -12,79 +12,72 @@ type ProductTool struct {
 	ReadOnly    bool   `json:"read_only"`
 }
 
-// ProductToolCount is the compact contract size (no CRUD aliases).
-const ProductToolCount = 9
+// ProductToolCount is the compact contract size.
+const ProductToolCount = 8
 
-// ProductTools is the session-native MCP surface. Mutations stay on the CLI.
+// ProductTools is the session-native MCP surface.
 func ProductTools() []ProductTool {
 	return []ProductTool{
 		{
 			Name:        "minerva_learn",
 			Title:       "Onboard to Minerva",
-			Description: "Use when starting a session or asking how Minerva works. Returns a one-page brief: thesis, commands, exit codes, product tools, and next actions. Does not mutate disk. Not a skill resolver — use minerva_resolve_skill for that.",
-			UseWhen:     "First time using Minerva, onboarding, or asking how the library operator works.",
+			Description: "Use when starting a session or asking how Minerva works. Returns the product thesis, commands, and MCP tools. Does not mutate disk.",
+			UseWhen:     "First time using Minerva, or asking what this tool is for.",
 			ReadOnly:    true,
 		},
 		{
-			Name:        "minerva_status",
-			Title:       "Unified library and stack status",
-			Description: "Use when you need an honest doctor report: library inventory, binary presence, optional deep readiness, open evidence, top next actions. Read-only. Prefer this over stack_check when you want a verdict. Set deep=false for a cheap presence-only report.",
-			UseWhen:     "Is the agent stack actually ready? Need a unified verdict.",
+			Name:        "minerva_sessions",
+			Title:       "List harness sessions",
+			Description: "Use when listing recent agent conversations from Claude Code, Codex, Cursor, or other harnesses. Filter by harness, workspace, or --since. Read-only.",
+			UseWhen:     "Which sessions exist, and on which harness?",
 			ReadOnly:    true,
 		},
 		{
-			Name:        "minerva_suggest",
-			Title:       "Ranked next actions",
-			Description: "Use when you want ranked next commands for the library or stack. Proposals only — does not apply changes. Prefer profile add-skills over activate. Not for picking a skill for the current task (use minerva_resolve_skill).",
-			UseWhen:     "What should I do next to fix the library or stack?",
+			Name:        "minerva_analyze",
+			Title:       "Analyze session signals",
+			Description: "Use when extracting tool-call patterns, retries, corrections, and skill load-gaps from one or more sessions. Returns signals with evidence. Does not write skills.",
+			UseWhen:     "What happened in this conversation, and which patterns repeat?",
+			ReadOnly:    true,
+		},
+		{
+			Name:        "minerva_propose",
+			Title:       "Propose skills from sessions",
+			Description: "Use when you want ranked skill proposals (new, update, load-gap) backed by session evidence. Saves drafts so minerva_apply can write them. Does not create SKILL.md until apply.",
+			UseWhen:     "Which skills should I create or load from recent sessions?",
 			ReadOnly:    true,
 		},
 		{
 			Name:        "minerva_resolve_skill",
 			Title:       "Resolve which skill to load",
-			Description: "Use when deciding which skill to load for the current task (PR review, frontend, docs, Stripe, testing). Returns ranked skills, whether they sit on a profile, and the exact next action (load_skill or profile add-skills). Does not activate Minerva-local pins and does not mutate disk.",
+			Description: "Use when deciding which catalog skill matches a natural-language intent. Returns ranked skills and the next action. Does not mutate disk.",
 			UseWhen:     "Which skill should I load for this task?",
 			ReadOnly:    true,
 		},
 		{
 			Name:        "minerva_skill",
 			Title:       "Read skills",
-			Description: "Use when listing, showing, or comparing skill bodies (action=list|show|compare). Read-only. Create/update/delete stay on the CLI. Not for choosing a skill by intent — use minerva_resolve_skill.",
+			Description: "Use when listing, showing, or comparing skill bodies (action=list|show|compare). Create/update/delete stay on the CLI unless you apply a proposal.",
 			UseWhen:     "Read a skill body or list the catalog.",
 			ReadOnly:    true,
 		},
 		{
-			Name:        "minerva_profile",
-			Title:       "Read profiles",
-			Description: "Use when listing, showing, or comparing agent profiles (action=list|show|compare). Read-only. add-skills and other mutations stay on the CLI so harnesses can approval-gate them.",
-			UseWhen:     "Inspect agent.yaml profiles on the shared library.",
+			Name:        "minerva_harness",
+			Title:       "Harness inventory and doctor",
+			Description: "Use when listing known harnesses or checking skill-dir drift (action=list|doctor). Read-only. Sync and install stay on the CLI.",
+			UseWhen:     "Which harnesses are present, and are their skills in sync?",
 			ReadOnly:    true,
 		},
 		{
-			Name:        "minerva_library",
-			Title:       "Lint the shared library",
-			Description: "Use when checking ~/.agents for missing skill refs, empty prompts, orphans, or secret-like strings (action=lint). Read-only. Export/import stay on the CLI.",
-			UseWhen:     "Is the shared agents library internally consistent?",
-			ReadOnly:    true,
-		},
-		{
-			Name:        "minerva_stack_check",
-			Title:       "Check stack presence",
-			Description: "Use when you only need PATH presence and tiers (core vs optional). Fast. Not domain readiness — indexes can still be stale. Use minerva_status with deep=true for retrieval_ready.",
-			UseWhen:     "Are the companion binaries installed?",
-			ReadOnly:    true,
-		},
-		{
-			Name:        "minerva_evidence",
-			Title:       "Read evidence conventions",
-			Description: "Use when you need Minerva fcheap tag docs or a search of minerva-tagged stashes (action=docs|search). Read-only. Save/close stay on the CLI.",
-			UseWhen:     "How are Minerva outcomes tagged, or search existing stashes.",
-			ReadOnly:    true,
+			Name:        "minerva_apply",
+			Title:       "Apply a skill proposal",
+			Description: "Use when writing a previously proposed new_skill or update_skill to ~/.agents/skills. Requires proposal_id from minerva_propose. This mutates disk.",
+			UseWhen:     "Create or update a SKILL.md from a proposal id.",
+			ReadOnly:    false,
 		},
 	}
 }
 
-// GatewayRoutes returns MCPHub-namespaced read-only routes (minerva__learn, …).
+// GatewayRoutes returns MCPHub-namespaced routes.
 func GatewayRoutes() []string {
 	tools := ProductTools()
 	out := make([]string, 0, len(tools))
@@ -94,7 +87,7 @@ func GatewayRoutes() []string {
 	return out
 }
 
-// ProductToolNames returns the advertised tool names in contract order.
+// ProductToolNames returns advertised tool names in contract order.
 func ProductToolNames() []string {
 	tools := ProductTools()
 	out := make([]string, len(tools))

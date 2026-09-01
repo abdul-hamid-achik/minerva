@@ -81,26 +81,23 @@ tasks:
       - rm -rf {{.BUILD_DIR}}
 
   glyph:
-    desc: Run Glyphrun self-specs for the Minerva CLI
+    desc: Run Glyphrun CLI self-specs
     cmds:
       - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN}}
       - glyph run ./specs --format md
 
   glyph-fast:
-    desc: Run fast Glyphrun specs (skip slow stack deep)
+    desc: Run Glyphrun CLI self-specs
     cmds:
       - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN}}
       - >
         glyph run
         ./specs/version.yml
         ./specs/help.yml
-        ./specs/stack_check_json.yml
         ./specs/init_and_skill.yml
-        ./specs/evidence_docs.yml
-        ./specs/library_and_profile.yml
-        ./specs/status_and_bridge.yml
         ./specs/skill_update_compare.yml
         ./specs/learn_and_resolve.yml
+        ./specs/harness_and_propose.yml
         --format md
 
   docs:dev:

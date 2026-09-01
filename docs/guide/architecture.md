@@ -3,43 +3,36 @@
 ```text
 cmd/minerva
 internal/
-  cli/            Cobra commands
+  cli/            Cobra commands (one file per surface)
   mcp/            MCP stdio server
-  skill/          SKILL.md discovery + Minerva activation
-  profile/        agent.yaml management
-  templates/      role prompts (builtin + disk)
-  library/        export/import/lint portable bundles
-  bridge/         local-agent integration snippets
-  monitor/        presence (bins + tiers)
-  integration/    deep readiness (sibling CLIs)
-  status/         unified doctor/status report
-  suggest/        shared suggestion engine
-  analytics/      append-safe events
-  evidence/       fcheap tag conventions + close receipts
-  textdiff/       unified diffs for compare
+  skill/          SKILL.md discovery, CRUD, resolve
+  harness/        Runtime catalog and path map
+  session/        Transcript adapters → Trace
+  signal/         Deterministic extractors
+  propose/        Signals → drafts + apply
+  sync/           Link/copy + .skill-lock.json
+  library/        Skill lint
+  secret/         Secret detection / redact
+  surface/        Compact MCP contract
+  learn/          One-page brief
+  textdiff/       Unified diffs
   version/
-docs/             VitePress site (this site)
+docs/             VitePress site
 specs/            Glyphrun CLI contracts
-browser-specs/    Cairn docs-site contracts
 ```
 
 ## Design rules
 
-1. **Disk is the SSOT** for library content shared with harnesses.  
-2. **Sibling tools own domain truth** — Minerva shells their `--json` APIs.  
-3. **Presence ≠ readiness** — especially codemap/vecgrep.  
-4. **Suggest proposes; host applies** — except allowlisted activate.  
-5. **No secret values** in analytics, skills, or stashes.  
-6. **Dogfood** with glyph (CLI) and cairn (site).
+1. **Disk is the SSOT** for skill bodies (`~/.agents/skills`).
+2. **Adapters are tolerant** — unknown JSONL line types are skipped.
+3. **Signals are deterministic** — no API key required for analyze/propose.
+4. **Propose then apply** — drafts persist in `.minerva/proposals.json`.
+5. **Do not overwrite harness-owned trees** (Cursor `skills-cursor`).
+6. **Redact before MCP** — secret-like strings never leave the host raw.
+7. **Dogfood** with glyph (CLI) and cairn (site).
 
-## Related stack
+## Related tools
 
-| Tool | Relationship |
-|------|----------------|
-| local-agent / sonar | Runtime consumers of `~/.agents` ([session-native](/guide/session-native)) |
-| MCPHub | Gateway + call intelligence |
-| Cortex | Task kernel (overview/stale signals only) |
-| Bob | Repo contract |
-| Codemap / Vecgrep | Retrieval readiness |
-| fcheap | Evidence vault |
-| glyph / cairn | Contract testing |
+Minerva no longer shells sibling CLIs for readiness. Cortex, MCPHub,
+codemap, and vecgrep remain useful *around* Minerva; they are not part of
+this binary.
