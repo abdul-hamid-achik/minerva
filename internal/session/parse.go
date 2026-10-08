@@ -18,7 +18,9 @@ import (
 // are almost always an inlined image or a huge tool result.
 const maxJSONLLine = 8 << 20
 
-func parseJSONL(path string, handle func(map[string]any)) error {
+// parseJSONL calls handle for each JSON object line of path. Lines it cannot
+// use (oversized, or not a JSON object) are counted in *skipped.
+func parseJSONL(path string, skipped *int, handle func(map[string]any)) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -29,12 +31,14 @@ func parseJSONL(path string, handle func(map[string]any)) error {
 		line, tooLong, err := readLine(r, maxJSONLLine)
 		// An oversized line is skipped, not fatal: one pasted screenshot
 		// must not drop every turn of the session around it.
-		if !tooLong {
-			if line = bytes.TrimSpace(line); len(line) > 0 {
-				var obj map[string]any
-				if json.Unmarshal(line, &obj) == nil {
-					handle(obj)
-				}
+		if tooLong {
+			*skipped++
+		} else if line = bytes.TrimSpace(line); len(line) > 0 {
+			var obj map[string]any
+			if json.Unmarshal(line, &obj) == nil {
+				handle(obj)
+			} else {
+				*skipped++
 			}
 		}
 		if err == io.EOF {
@@ -68,7 +72,7 @@ func readLine(r *bufio.Reader, max int) (line []byte, tooLong bool, err error) {
 
 func parseClaude(s Session) (Session, error) {
 	calls := callIndex{}
-	err := parseJSONL(s.Path, func(obj map[string]any) {
+	err := parseJSONL(s.Path, &s.SkippedLines, func(obj map[string]any) {
 		if cwd, ok := obj["cwd"].(string); ok && s.Workspace == "" {
 			s.Workspace = cwd
 		}
@@ -100,7 +104,7 @@ func parseClaude(s Session) (Session, error) {
 
 func parseCursor(s Session) (Session, error) {
 	calls := callIndex{}
-	err := parseJSONL(s.Path, func(obj map[string]any) {
+	err := parseJSONL(s.Path, &s.SkippedLines, func(obj map[string]any) {
 		role, _ := obj["role"].(string)
 		msg, _ := obj["message"].(map[string]any)
 		if msg == nil {
@@ -138,7 +142,7 @@ func inferCursorWorkspace(path string) string {
 
 func parseCodex(s Session) (Session, error) {
 	calls := callIndex{}
-	err := parseJSONL(s.Path, func(obj map[string]any) {
+	err := parseJSONL(s.Path, &s.SkippedLines, func(obj map[string]any) {
 		typ, _ := obj["type"].(string)
 		payload, _ := obj["payload"].(map[string]any)
 		if ts, ok := obj["timestamp"].(string); ok && s.StartedAt.IsZero() {
@@ -302,7 +306,7 @@ func parseOpenCode(s Session) (Session, error) {
 	}
 	var meta map[string]any
 	if json.Unmarshal(data, &meta) == nil {
-		if id, ok := meta["id"].(string); ok && id != "" {
+		if id, ok := meta["id"].(string); ok && safeID(id) {
 			s.ID = id
 		}
 		if dir, ok := meta["directory"].(string); ok && dir != "" {
@@ -355,7 +359,7 @@ func parseOpenCode(s Session) (Session, error) {
 		}
 		turn := Turn{Role: role}
 		msgID, _ := msg["id"].(string)
-		if msgID == "" {
+		if !safeID(msgID) {
 			msgID = strings.TrimSuffix(e.Name(), ".json")
 		}
 		appendOpenCodeParts(&turn, filepath.Join(storageRoot, "part", msgID))
@@ -369,6 +373,12 @@ func parseOpenCode(s Session) (Session, error) {
 		}
 	}
 	return s, nil
+}
+
+// safeID reports whether id, read from an OpenCode JSON file, can name a
+// storage directory: one path element, so it cannot climb out of storage.
+func safeID(id string) bool {
+	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, `/\`+"\x00")
 }
 
 func appendOpenCodeParts(turn *Turn, partDir string) {
@@ -446,7 +456,7 @@ func parseCopilot(s Session) (Session, error) {
 	// assistant.message lists toolRequests and tool.execution_start then
 	// announces the same toolCallId; both map to one call.
 	calls := callIndex{}
-	err = parseJSONL(eventsPath, func(obj map[string]any) {
+	err = parseJSONL(eventsPath, &s.SkippedLines, func(obj map[string]any) {
 		typ, _ := obj["type"].(string)
 		data, _ := obj["data"].(map[string]any)
 		if data == nil {
@@ -615,7 +625,7 @@ func parseGemini(s Session) (Session, error) {
 	}
 
 	if strings.HasSuffix(strings.ToLower(s.Path), ".jsonl") {
-		if err := parseJSONL(s.Path, handle); err != nil {
+		if err := parseJSONL(s.Path, &s.SkippedLines, handle); err != nil {
 			return s, err
 		}
 	} else {

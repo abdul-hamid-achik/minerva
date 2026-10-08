@@ -16,7 +16,7 @@ import (
 // Other entry types (model_change, title, model_usage, …) are ignored.
 func parseOMP(s Session) (Session, error) {
 	calls := callIndex{}
-	err := parseJSONL(s.Path, func(obj map[string]any) {
+	err := parseJSONL(s.Path, &s.SkippedLines, func(obj map[string]any) {
 		typ, _ := obj["type"].(string)
 		switch typ {
 		case "session":

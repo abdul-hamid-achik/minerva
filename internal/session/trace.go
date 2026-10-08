@@ -66,6 +66,9 @@ type Session struct {
 	TurnCount int       `json:"turn_count"`
 	ToolCount int       `json:"tool_count"`
 	Skills    []string  `json:"skills,omitempty"`
+	// SkippedLines counts transcript lines that could not be read (oversized
+	// or not JSON), so a partly parsed session is visible.
+	SkippedLines int `json:"skipped_lines,omitempty"`
 }
 
 // Filter selects sessions.
@@ -149,8 +152,20 @@ func listStubs(env harness.Env, filter Filter) ([]Session, error) {
 		}
 	}
 	out = dropHermesLogCopies(out)
+	// Newest first. Equal times break on harness, id and path so --limit
+	// keeps the same sessions from run to run.
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].MTime.After(out[j].MTime)
+		a, b := out[i], out[j]
+		if !a.MTime.Equal(b.MTime) {
+			return a.MTime.After(b.MTime)
+		}
+		if a.Harness != b.Harness {
+			return a.Harness < b.Harness
+		}
+		if a.ID != b.ID {
+			return a.ID < b.ID
+		}
+		return a.Path < b.Path
 	})
 	if filter.Limit > 0 && len(out) > filter.Limit {
 		out = out[:filter.Limit]
