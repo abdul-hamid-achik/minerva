@@ -15,8 +15,7 @@ import (
 // parts; a toolResult message carries toolCallId, isError and text parts.
 // Other entry types (model_change, title, model_usage, …) are ignored.
 func parseOMP(s Session) (Session, error) {
-	type loc struct{ turn, call int }
-	calls := map[string]loc{}
+	calls := callIndex{}
 	err := parseJSONL(s.Path, func(obj map[string]any) {
 		typ, _ := obj["type"].(string)
 		switch typ {
@@ -55,10 +54,12 @@ func parseOMP(s Session) (Session, error) {
 					if name == "" {
 						continue
 					}
-					tc := ToolCall{Name: name, Args: compactJSON(pm["arguments"]), Category: categorize(name)}
-					if id, _ := pm["id"].(string); id != "" {
-						calls[id] = loc{len(s.Turns), len(turn.ToolCalls)}
+					id, _ := pm["id"].(string)
+					if calls.has(id) {
+						continue // a retried message can repeat a call it already sent
 					}
+					tc := ToolCall{Name: name, Args: compactJSON(pm["arguments"]), Category: categorize(name)}
+					calls.add(id, len(s.Turns), len(turn.ToolCalls))
 					turn.ToolCalls = append(turn.ToolCalls, tc)
 					if tc.Category == CatSkill {
 						turn.SkillsInvoked = append(turn.SkillsInvoked, skillNamesFromArgs(tc.Args)...)
@@ -69,11 +70,10 @@ func parseOMP(s Session) (Session, error) {
 				}
 			case "toolResult":
 				id, _ := msg["toolCallId"].(string)
-				at, ok := calls[id]
-				if !ok {
+				tc := calls.lookup(&s, id)
+				if tc == nil {
 					return
 				}
-				tc := &s.Turns[at.turn].ToolCalls[at.call]
 				tc.Result = truncate(ompText(msg["content"]), 500)
 				tc.IsError, _ = msg["isError"].(bool)
 			}

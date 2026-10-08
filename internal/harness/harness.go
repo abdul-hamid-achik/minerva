@@ -122,7 +122,7 @@ func Catalog(env Env) []Harness {
 			// sync and doctor ignore those (see internal/sync listSkillNames).
 			ID: Hermes, DisplayName: "Hermes Agent",
 			SkillsDir:    filepath.Join(home, ".hermes", "skills"),
-			SessionGlobs: []string{filepath.Join(home, ".hermes", "sessions", "*.jsonl")},
+			SessionGlobs: []string{filepath.Join(home, ".hermes", "state.db"), filepath.Join(home, ".hermes", "sessions", "*.jsonl")},
 			LinkSkills:   true, SyncWritable: true,
 		},
 		{

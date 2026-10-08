@@ -280,3 +280,32 @@ func TestExtract_Retry(t *testing.T) {
 		t.Fatalf("expected retry: %#v", sigs)
 	}
 }
+
+func TestExtract_RetryNeedsSameCommandAndIsCapped(t *testing.T) {
+	bash := func(cmd string, failed bool) session.ToolCall {
+		return session.ToolCall{Name: "Bash", Category: session.CatShell, Command: cmd, IsError: failed}
+	}
+	other := session.Session{Harness: "claude", ID: "o", Turns: []session.Turn{{Role: "assistant",
+		ToolCalls: []session.ToolCall{bash("go test ./...", true), bash("git status", false)}}}}
+	for _, s := range Extract([]session.Session{other}, nil) {
+		if s.Kind == KindRetry {
+			t.Fatalf("a different command after a failure counted as a retry: %+v", s)
+		}
+	}
+
+	var calls []session.ToolCall
+	for i := 0; i < 50; i++ {
+		calls = append(calls, bash("go test ./...", true))
+	}
+	sess := session.Session{Harness: "claude", ID: "s", Turns: []session.Turn{{Role: "assistant", ToolCalls: calls}}}
+	for _, s := range Extract([]session.Session{sess}, nil) {
+		if s.Kind != KindRetry {
+			continue
+		}
+		if s.Weight > PerSessionCap+10 {
+			t.Fatalf("one session pushed retry weight to %d", s.Weight)
+		}
+		return
+	}
+	t.Fatal("expected a retry signal")
+}

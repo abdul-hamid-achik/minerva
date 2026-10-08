@@ -97,6 +97,18 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 					}
 					continue
 				}
+				if h.ID == harness.Hermes && filepath.Base(p) == hermesDBName {
+					stubs, err := listHermesDB(p)
+					if err != nil {
+						continue
+					}
+					for _, sess := range stubs {
+						if keep(env, filter, sess) {
+							out = append(out, sess)
+						}
+					}
+					continue
+				}
 				if !strings.HasSuffix(strings.ToLower(p), ".jsonl") && !strings.HasSuffix(strings.ToLower(p), ".json") {
 					if filepath.Base(p) == "sonar.db" {
 						sess := Session{Harness: h.ID, ID: "sonar.db", Path: p, MTime: st.ModTime()}
@@ -114,6 +126,7 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 			}
 		}
 	}
+	out = dropHermesLogCopies(out)
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].MTime.After(out[j].MTime)
 	})
@@ -121,6 +134,28 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 		out = out[:filter.Limit]
 	}
 	return out, nil
+}
+
+// dropHermesLogCopies removes Hermes gateway JSONL sessions that state.db
+// also holds, so a session is not analyzed twice.
+func dropHermesLogCopies(in []Session) []Session {
+	inDB := map[string]bool{}
+	for _, s := range in {
+		if s.Harness == harness.Hermes && filepath.Base(s.Path) == hermesDBName {
+			inDB[s.ID] = true
+		}
+	}
+	if len(inDB) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, s := range in {
+		if s.Harness == harness.Hermes && filepath.Base(s.Path) != hermesDBName && inDB[s.ID] {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func keep(env harness.Env, f Filter, s Session) bool {
@@ -221,10 +256,17 @@ func summarize(s *Session) {
 			if tc.Category == CatSkill && tc.Args != "" {
 				var obj map[string]any
 				if json.Unmarshal([]byte(tc.Args), &obj) == nil {
-					if n, ok := obj["skill"].(string); ok && n != "" && !seen[n] {
+					if n, ok := obj["skill"].(string); ok && n != "" && !seen[bareSkillName(n)] {
+						n = bareSkillName(n)
 						seen[n] = true
 						s.Skills = append(s.Skills, n)
 					}
+				}
+			}
+			if tc.Category == CatRead {
+				if n := skillFromRead(tc.Args); n != "" && !seen[n] {
+					seen[n] = true
+					s.Skills = append(s.Skills, n)
 				}
 			}
 		}
@@ -304,15 +346,35 @@ func compactJSON(v any) string {
 	case string:
 		return t
 	default:
-		b, err := json.Marshal(t)
+		// Cap long string values rather than the encoded text, so the
+		// result stays valid JSON and a long command keeps its executable.
+		b, err := json.Marshal(capStrings(t, 2000))
 		if err != nil {
 			return ""
 		}
-		s := string(b)
-		if len(s) > 2000 {
-			return s[:2000]
+		return string(b)
+	}
+}
+
+// capStrings returns v with every string value cut to at most n bytes.
+func capStrings(v any, n int) any {
+	switch t := v.(type) {
+	case string:
+		return truncate(t, n)
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			out[k] = capStrings(x, n)
 		}
-		return s
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = capStrings(x, n)
+		}
+		return out
+	default:
+		return v
 	}
 }
 

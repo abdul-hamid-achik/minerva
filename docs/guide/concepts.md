@@ -28,7 +28,7 @@
 | `~/.cursor/projects/**/agent-transcripts/**/*.jsonl` | Cursor transcripts |
 | `~/.gemini/tmp/*/chats/*.jsonl` | Gemini CLI chats |
 | `~/.hermes/skills` | Hermes Agent skills (symlinked; its dot-entries and `_shared` are left alone) |
-| `~/.hermes/sessions/*.jsonl` | Hermes Agent transcripts |
+| `~/.hermes/state.db`, `~/.hermes/sessions/*.jsonl` | Hermes Agent sessions (SQLite store, older JSONL logs) |
 | `~/.omp/agent/sessions/*/*.jsonl` | oh-my-pi (omp) transcripts; omp reads `~/.agents/skills` natively |
 
 ## Trace model
