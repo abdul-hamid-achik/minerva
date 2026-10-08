@@ -24,7 +24,7 @@ func parseHermes(s Session) (Session, error) {
 		return parseHermesDB(s)
 	}
 	calls := callIndex{}
-	err := parseJSONL(s.Path, func(obj map[string]any) { hermesMessage(&s, calls, obj) })
+	err := parseJSONL(s.Path, &s.SkippedLines, func(obj map[string]any) { hermesMessage(&s, calls, obj) })
 	if s.ID == "" {
 		s.ID = strings.TrimSuffix(filepath.Base(s.Path), filepath.Ext(s.Path))
 	}
