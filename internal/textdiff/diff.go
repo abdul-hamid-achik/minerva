@@ -65,9 +65,24 @@ type op struct {
 	Lines []string
 }
 
+// maxLCSCells bounds the LCS table myers builds.
+const maxLCSCells = 10_000_000
+
 // myers is a compact LCS-based edit script (fine for skill-sized bodies).
 func myers(a, b []string) []op {
 	n, m := len(a), len(b)
+	// The LCS table is n*m ints (about 80 MB at the cap, two ~3000-line
+	// files). Past it, show a whole-file replacement instead.
+	if n*m > maxLCSCells {
+		var out []op
+		if n > 0 {
+			out = append(out, op{Kind: opDelete, Lines: a})
+		}
+		if m > 0 {
+			out = append(out, op{Kind: opInsert, Lines: b})
+		}
+		return out
+	}
 	// DP LCS lengths
 	dp := make([][]int, n+1)
 	for i := range dp {

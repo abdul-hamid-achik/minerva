@@ -58,9 +58,9 @@ func newProposeCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
 	cmd.Flags().StringVar(&harnessID, "harness", "", "filter by harness id")
-	cmd.Flags().StringVar(&workspace, "workspace", "", "substring match on session workspace")
+	cmd.Flags().StringVar(&workspace, "workspace", "", "only sessions in this workspace (path, or its last segment)")
 	cmd.Flags().StringVar(&since, "since", "30d", "age window (24h, 7d)")
-	cmd.Flags().IntVar(&limit, "limit", 40, "max sessions to parse")
+	cmd.Flags().IntVar(&limit, "limit", 40, "max sessions (counted after --workspace)")
 
 	apply := &cobra.Command{
 		Use:   "apply <proposal-id>",

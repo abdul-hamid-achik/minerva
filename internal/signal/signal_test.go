@@ -309,3 +309,51 @@ func TestExtract_RetryNeedsSameCommandAndIsCapped(t *testing.T) {
 	}
 	t.Fatal("expected a retry signal")
 }
+
+func TestExtract_CorrectionFalsePositives(t *testing.T) {
+	acted := session.Turn{Role: "assistant", Text: "Done, I updated the handler."}
+	asked := session.Turn{Role: "assistant", Text: "Should I also update the docs?"}
+	user := func(text string) session.Turn { return session.Turn{Role: "user", Text: text} }
+	cases := []struct {
+		name  string
+		turns []session.Turn
+		want  bool
+	}{
+		{"system reminder", []session.Turn{acted, user("<system-reminder>if it fails, try again</system-reminder> thanks, looks good")}, false},
+		{"answer to a question", []session.Turn{asked, user("No")}, false},
+		{"pasted log far down", []session.Turn{acted, user("here is the output:\n" + strings.Repeat("ok line\n", 80) + "that didn't work")}, false},
+		{"real correction", []session.Turn{acted, user("no, use the other file")}, true},
+		{"real correction after a question", []session.Turn{asked, user("that's not what I asked for")}, true},
+	}
+	for _, c := range cases {
+		sess := session.Session{Harness: "claude", ID: c.name, Turns: c.turns}
+		got := false
+		for _, s := range Extract([]session.Session{sess}, nil) {
+			got = got || s.Kind == KindCorrection
+		}
+		if got != c.want {
+			t.Errorf("%s: correction=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestExtract_DeterministicOrder(t *testing.T) {
+	bash := func(cmd string) session.ToolCall {
+		return session.ToolCall{Name: "Bash", Category: session.CatShell, Command: cmd}
+	}
+	var sessions []session.Session
+	for i := 0; i < 3; i++ {
+		sessions = append(sessions, session.Session{Harness: "claude", ID: string(rune('a' + i)), Turns: []session.Turn{{
+			Role: "assistant", ToolCalls: []session.ToolCall{bash("git status"), bash("make test"), bash("git diff"), bash("make lint")},
+		}}})
+	}
+	first := Extract(sessions, nil)
+	for i := 0; i < 20; i++ {
+		again := Extract(sessions, nil)
+		for j := range first {
+			if again[j].Kind != first[j].Kind || again[j].Key != first[j].Key {
+				t.Fatalf("run %d: order changed at %d", i, j)
+			}
+		}
+	}
+}

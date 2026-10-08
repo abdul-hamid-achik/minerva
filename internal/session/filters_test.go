@@ -149,3 +149,27 @@ func TestStubWorkspace_SkipsOtherProjectsWithoutParsing(t *testing.T) {
 		t.Fatalf("got %+v, err %v", got, err)
 	}
 }
+
+func TestList_EmptyAndUnparsableSources(t *testing.T) {
+	home := t.TempDir()
+	// A Copilot session dir without events.jsonl and a sonar log have no
+	// turns to read; neither is listed.
+	if err := os.MkdirAll(filepath.Join(home, ".copilot", "session-state", "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".sonar", "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, filepath.Join(home, ".sonar", "logs", "a.jsonl"), "{}\n")
+	env := harness.Env{Home: home, AgentsDir: filepath.Join(home, ".agents"), Now: time.Now()}
+	got, err := List(env, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("got %#v, want an empty non-nil list", got)
+	}
+	if _, err := List(env, Filter{Harness: "nope"}); err == nil {
+		t.Fatal("unknown harness accepted")
+	}
+}

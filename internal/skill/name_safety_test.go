@@ -161,3 +161,19 @@ func TestUpdate_KeepsOtherFrontmatterKeys(t *testing.T) {
 		t.Fatalf("body-only update changed frontmatter:\n%s", data)
 	}
 }
+
+func TestLoad_BOMAndCreateLimits(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "skills", "bom", "SKILL.md"), "\xef\xbb\xbf---\nname: bom\ndescription: has a BOM\n---\nbody\n")
+	mgr := ForAgents(dir)
+	if err := mgr.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	if s := mgr.Get("bom"); s == nil || s.Description != "has a BOM" {
+		t.Fatalf("BOM hid the frontmatter: %+v", s)
+	}
+	big := strings.Repeat("x", MaxSkillBodyBytes+1)
+	if err := mgr.Create(filepath.Join(dir, "skills"), "huge", "d", big); err == nil {
+		t.Fatal("Create accepted an oversized body")
+	}
+}

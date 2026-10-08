@@ -69,7 +69,7 @@ func Save(agentsDir string, proposals []Proposal) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	merged := append([]Proposal(nil), proposals...)
+	merged := append([]Proposal{}, proposals...)
 	seen := map[string]bool{}
 	for _, p := range proposals {
 		seen[p.ID] = true
@@ -128,7 +128,7 @@ func FromSignals(sigs []signal.Signal, catalog []*skill.Skill) []Proposal {
 		onDisk[s.Name] = s
 	}
 
-	var out []Proposal
+	out := []Proposal{} // JSON [] rather than null when nothing is proposed
 	seen := map[string]bool{}
 	for _, sig := range sigs {
 		var p Proposal

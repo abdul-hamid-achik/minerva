@@ -73,6 +73,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--since` rejects negative durations and malformed day counts (`1.5d`,
   `7xd`) instead of silently widening the window
 - Codex sessions report the model from `turn_context`, not the provider
+- Secret redaction covers JSON-quoted and compound keys (`"password": "…"`,
+  `"aws_secret_access_key"`, `"Authorization": "Bearer …"`), private keys cut
+  off before their END line, tokens glued to `_` (`mcp__srv_ghp_…`), Hugging
+  Face and DigitalOcean tokens, and tool names. MCP `minerva_skill`
+  show/compare and `resolve` no longer return secrets verbatim
+- `skill resolve` keeps the words of a skill name the query spells out, so
+  `docker-workflow` is found in a large catalog
+- `update_skill` proposals target a skill only when its whole name appears
+  in the signal key; skills named `tool`, `go` or `retry` no longer collect
+  unrelated patterns
+- `skill sync` without `--to` touches only installed harnesses; `--to`
+  rejects unknown and read-only harnesses (`cursor`, `omp`, `sonar`). A
+  symlink pointing outside `~/.agents/skills` is kept unless `--force`; a
+  harness folder without `SKILL.md` is never replaced
+- `skill install` swaps a fully copied staging dir in (a failed copy keeps
+  the installed skill) and does not copy `.git`; `.skill-lock.json` is
+  written atomically
+- `skill delete` removes the harness symlinks to the skill; `harness doctor`
+  reports dangling links as `broken-link` and unreadable copies as `error`
+- Corrections are searched in what the user typed (injected reminders and
+  attachments stripped, first 400 bytes); a bare "no" answering the
+  assistant's question is not a correction. Signal order is deterministic
+- `sessions`/`propose` print `[]`, not `null`, when empty; `started_at` is
+  omitted when unknown; Copilot dirs without `events.jsonl` and sonar logs
+  (no parser yet) are no longer listed as empty sessions
+- A UTF-8 BOM no longer hides a SKILL.md's frontmatter; `skill create`
+  enforces the same size limits as `update`; `skill compare` on huge files
+  falls back to a whole-file diff instead of allocating gigabytes
 
 ## [1.1.0] - 2026-09-01
 
