@@ -1,0 +1,8 @@
+{"role":"session_meta","tools":[],"model":"test-model","platform":"cli","timestamp":"2026-07-18T10:00:00.000000"}
+{"role":"user","content":"run the tests and load the demo skill","timestamp":"2026-07-18T10:00:01.000000"}
+{"role":"assistant","content":"on it","reasoning":"private","finish_reason":"tool_calls","timestamp":"2026-07-18T10:00:02.000000","tool_calls":[{"id":"call_1","call_id":"call_1","type":"function","function":{"name":"terminal","arguments":"{\"command\":\"go test ./...\"}"}},{"id":"call_2","type":"function","function":{"name":"skill_view","arguments":"{\"name\":\"demo\"}"}}]}
+{"role":"tool","tool_call_id":"call_1","content":"{\"output\":\"FAIL\",\"exit_code\":1,\"error\":null}","timestamp":"2026-07-18T10:00:03.000000"}
+{"role":"tool","tool_call_id":"call_2","content":"{\"success\":true,\"name\":\"demo\"}","timestamp":"2026-07-18T10:00:04.000000"}
+{"role":"tool","tool_call_id":"call_unknown","content":"orphan result is ignored"}
+not json at all
+{"role":"assistant","content":"tests fail","finish_reason":"stop","timestamp":"2026-07-18T10:00:05.000000"}

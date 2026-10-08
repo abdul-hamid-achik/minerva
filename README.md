@@ -4,8 +4,8 @@
 [![Changelog](https://img.shields.io/badge/changelog-unreleased-blue)](./CHANGELOG.md)
 
 **Skill intelligence** for agent harnesses. Minerva reads conversations and
-tool calls from Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini, and
-sonar — then proposes `SKILL.md` files and keeps the canonical
+tool calls from Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini,
+Hermes Agent, oh-my-pi (omp), and sonar — then proposes `SKILL.md` files and keeps the canonical
 `~/.agents/skills` library in sync.
 
 It is **not** a second agent runtime, not Cortex, and not a monitor for
@@ -119,7 +119,10 @@ internal/
 
 Canonical skills live in `~/.agents/skills`. Harness copies/symlinks are
 derived. Cursor's `~/.cursor/skills-cursor` is treated as harness-owned and
-is never overwritten.
+is never overwritten. Hermes Agent's `~/.hermes/skills` is synced by symlink;
+Minerva leaves its dot-entries (`.archive`, `.curator_*`, …) and `_shared`
+alone. oh-my-pi (omp) and sonar read `~/.agents/skills` directly, so Minerva
+only reads their sessions and never syncs into them.
 
 ## Development
 

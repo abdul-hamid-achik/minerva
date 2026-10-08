@@ -18,6 +18,8 @@ const (
 	Copilot  = "copilot"
 	Gemini   = "gemini"
 	Sonar    = "sonar"
+	Hermes   = "hermes"
+	OMP      = "omp"
 )
 
 // Env is the filesystem context Minerva uses to find harness data.
@@ -51,7 +53,14 @@ type Harness struct {
 	LinkSkills bool `json:"link_skills"`
 	// SyncWritable is false for harness-owned skill trees (do not overwrite).
 	SyncWritable bool `json:"sync_writable"`
-	Present      bool `json:"present"`
+	// Native marks a harness that reads the canonical ~/.agents/skills tree
+	// directly: there is nothing to sync into it and nothing to diff.
+	Native bool `json:"native,omitempty"`
+	// PresenceDirs, when set, replaces the SkillsDir check in presence
+	// detection. Native harnesses need it: their SkillsDir is the shared
+	// canonical tree, which exists whether or not the harness is installed.
+	PresenceDirs []string `json:"presence_dirs,omitempty"`
+	Present      bool     `json:"present"`
 }
 
 // Catalog returns every known harness with paths resolved against env.
@@ -105,10 +114,38 @@ func Catalog(env Env) []Harness {
 			SkillsDir:    filepath.Join(env.AgentsDir, "skills"),
 			SessionGlobs: []string{filepath.Join(home, ".sonar", "logs", "*"), filepath.Join(home, ".sonar", "sonar.db")},
 			LinkSkills:   false, SyncWritable: false,
+			Native: true, PresenceDirs: []string{filepath.Join(home, ".sonar")},
+		},
+		{
+			// Hermes walks its skills dir with followlinks=True, so symlinks
+			// work. The dir also holds Hermes-owned dot-entries and _shared;
+			// sync and doctor ignore those (see internal/sync listSkillNames).
+			ID: Hermes, DisplayName: "Hermes Agent",
+			SkillsDir:    filepath.Join(home, ".hermes", "skills"),
+			SessionGlobs: []string{filepath.Join(home, ".hermes", "sessions", "*.jsonl")},
+			LinkSkills:   true, SyncWritable: true,
+		},
+		{
+			// omp loads ~/.agents/skills natively; a separate dir would only
+			// duplicate every skill.
+			ID: OMP, DisplayName: "oh-my-pi (omp)",
+			SkillsDir:    filepath.Join(env.AgentsDir, "skills"),
+			SessionGlobs: []string{filepath.Join(home, ".omp", "agent", "sessions", "*", "*.jsonl")},
+			LinkSkills:   false, SyncWritable: false,
+			Native: true, PresenceDirs: []string{filepath.Join(home, ".omp", "agent")},
 		},
 	}
 	for i := range items {
-		items[i].Present = dirExists(items[i].SkillsDir) || anyGlobExists(items[i].SessionGlobs)
+		h := &items[i]
+		present := anyGlobExists(h.SessionGlobs)
+		if len(h.PresenceDirs) > 0 {
+			for _, d := range h.PresenceDirs {
+				present = present || dirExists(d)
+			}
+		} else {
+			present = present || dirExists(h.SkillsDir)
+		}
+		h.Present = present
 	}
 	return items
 }
