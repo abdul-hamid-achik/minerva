@@ -41,7 +41,7 @@ func newSessionsCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
 	cmd.Flags().StringVar(&harnessID, "harness", "", "filter by harness id")
-	cmd.Flags().StringVar(&workspace, "workspace", "", "only sessions in this workspace (parses each session to find it)")
+	cmd.Flags().StringVar(&workspace, "workspace", "", "only sessions in this workspace (path, or its last segment)")
 	cmd.Flags().StringVar(&since, "since", "", "age window (24h, 7d)")
 	cmd.Flags().IntVar(&limit, "limit", 30, "max sessions")
 	return cmd

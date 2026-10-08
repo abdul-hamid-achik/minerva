@@ -3,6 +3,7 @@ package skill
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -204,6 +205,8 @@ func loadSkillEntry(dir string, entry os.DirEntry) (*Skill, error) {
 	if !utf8.Valid(data) {
 		return nil, fmt.Errorf("parse skill %s: content is not valid UTF-8", path)
 	}
+	// Some editors on Windows prepend a BOM, which would hide the "---" line.
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	skill, err := parseFrontmatter(string(data))
 	if err != nil {
 		return nil, fmt.Errorf("parse skill %s: %w", path, err)
@@ -386,6 +389,12 @@ func (m *Manager) Has(name string) bool {
 func (m *Manager) Create(dir, name, description, content string) error {
 	if err := validateSkillName(name); err != nil {
 		return fmt.Errorf("invalid skill name: %w", err)
+	}
+	if len(description) > MaxSkillDescriptionBytes {
+		return fmt.Errorf("description exceeds %d bytes", MaxSkillDescriptionBytes)
+	}
+	if len(content) > MaxSkillBodyBytes {
+		return fmt.Errorf("content exceeds %d bytes", MaxSkillBodyBytes)
 	}
 	if m.Has(name) {
 		return fmt.Errorf("skill %q already exists", name)

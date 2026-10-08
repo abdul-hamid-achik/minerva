@@ -202,10 +202,20 @@ func newSkillDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			s := mgr.Get(args[0])
 			if err := mgr.Delete(filepath.Join(agentsDir(), "skills"), args[0]); err != nil {
 				return err
 			}
 			fmt.Printf("skill %q deleted\n", args[0])
+			if s != nil && !skill.IsFlat(s) {
+				links, err := sync.RemoveLinks(env(), filepath.Dir(s.Path))
+				for _, l := range links {
+					fmt.Printf("  removed link %s\n", l)
+				}
+				if err != nil {
+					return fmt.Errorf("remove harness links: %w", err)
+				}
+			}
 			return nil
 		},
 	}

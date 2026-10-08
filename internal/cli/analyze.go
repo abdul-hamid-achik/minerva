@@ -54,9 +54,9 @@ func newAnalyzeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
 	cmd.Flags().BoolVar(&last, "last", false, "analyze only the newest session")
 	cmd.Flags().StringVar(&harnessID, "harness", "", "filter by harness id")
-	cmd.Flags().StringVar(&workspace, "workspace", "", "substring match on session workspace")
+	cmd.Flags().StringVar(&workspace, "workspace", "", "only sessions in this workspace (path, or its last segment)")
 	cmd.Flags().StringVar(&since, "since", "", "age window (24h, 7d)")
-	cmd.Flags().StringVar(&sessionID, "session", "", "session id prefix")
-	cmd.Flags().IntVar(&limit, "limit", 0, "max sessions to parse")
+	cmd.Flags().StringVar(&sessionID, "session", "", "session id prefix (or a Codex rollout uuid prefix)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "max sessions (counted after --workspace)")
 	return cmd
 }

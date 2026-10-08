@@ -196,3 +196,19 @@ func TestSave_KeepsEarlierIDsAndReplacesSameID(t *testing.T) {
 		t.Fatalf("temp files left behind: %v", entries)
 	}
 }
+
+func TestClosest_WholeWordsOfTheKeyOnly(t *testing.T) {
+	catalog := []*skill.Skill{{Name: "tool"}, {Name: "go"}, {Name: "go-test"}, {Name: "retry"}}
+	cases := map[string]string{
+		"mcp__srv__x → npm(npm) → Edit": "",        // "tool"/"retry" live only in the message
+		"Bash(mongo) → Read → Edit":     "",        // no substring match
+		"Bash(go) → Read → Edit":        "go",      // whole word
+		"Bash(go) → Bash(test) → Edit":  "go-test", // most specific name wins
+	}
+	for key, want := range cases {
+		sig := signal.Signal{Kind: signal.KindRepeat, Key: key, Message: "repeated tool sequence; retry after error"}
+		if got := closest(catalog, sig); got != want {
+			t.Errorf("closest(%q) = %q, want %q", key, got, want)
+		}
+	}
+}

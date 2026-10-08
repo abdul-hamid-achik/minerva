@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/abdul-hamid-achik/minerva/internal/secret"
 )
 
 // ResolveHit is one ranked skill for an operator intent.
@@ -27,11 +29,12 @@ const maxResolveHits = 5
 // Resolve ranks catalog skills against a natural-language intent.
 func Resolve(query string, skills []*Skill) ResolveResult {
 	q := strings.TrimSpace(query)
-	out := ResolveResult{Query: q, Hits: []ResolveHit{}}
+	// The query is echoed back; a pasted prompt can carry a secret.
+	out := ResolveResult{Query: secret.Redact(q), Hits: []ResolveHit{}}
 	if q == "" {
 		return out
 	}
-	terms := dropCommonTerms(tokenize(q), skills)
+	terms := dropCommonTerms(tokenize(q), skills, namedTerms(tokenize(q), skills))
 	if len(terms) == 0 {
 		return out
 	}
@@ -84,13 +87,17 @@ const longDescriptionBytes = 400
 // dropCommonTerms removes query terms that appear in the name or description
 // of a third or more of the catalog. "code", "test", "app" carry no signal
 // when every skill mentions them; a small catalog keeps every term.
-func dropCommonTerms(terms []string, skills []*Skill) []string {
+func dropCommonTerms(terms []string, skills []*Skill, keep map[string]bool) []string {
 	terms = unique(terms)
 	if len(skills) < commonTermMinCatalog {
 		return terms
 	}
 	out := make([]string, 0, len(terms))
 	for _, term := range terms {
+		if keep[term] {
+			out = append(out, term)
+			continue
+		}
 		df := 0
 		for _, s := range skills {
 			if s == nil {
@@ -106,6 +113,34 @@ func dropCommonTerms(terms []string, skills []*Skill) []string {
 		out = append(out, term)
 	}
 	return out
+}
+
+// namedTerms returns the query terms that spell out a whole skill name
+// ("docker-workflow" or "docker workflow" for skill docker-workflow). They
+// are never dropped as common: naming a skill is the strongest signal there
+// is, even when many skills share its words.
+func namedTerms(terms []string, skills []*Skill) map[string]bool {
+	inQuery := map[string]bool{}
+	for _, t := range terms {
+		inQuery[t] = true
+	}
+	keep := map[string]bool{}
+	for _, s := range skills {
+		if s == nil {
+			continue
+		}
+		parts := tokenize(s.Name)
+		all := len(parts) > 0
+		for _, p := range parts {
+			all = all && inQuery[p]
+		}
+		if all {
+			for _, p := range parts {
+				keep[p] = true
+			}
+		}
+	}
+	return keep
 }
 
 // scoreSkill returns a score and the distinct query terms that hit. A skill

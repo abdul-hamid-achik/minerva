@@ -31,3 +31,12 @@ func TestUnified_insertDelete(t *testing.T) {
 		t.Fatalf("expected equal line1:\n%s", out)
 	}
 }
+
+func TestUnified_HugeInputsFallBack(t *testing.T) {
+	a := strings.Repeat("line a\n", 5000)
+	b := strings.Repeat("line b\n", 5000)
+	out := Unified("a", "b", a, b)
+	if !strings.Contains(out, "-line a") || !strings.Contains(out, "+line b") {
+		t.Fatal("fallback diff lost the change")
+	}
+}

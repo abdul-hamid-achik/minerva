@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/minerva/internal/session"
 	"github.com/abdul-hamid-achik/minerva/internal/skill"
@@ -151,18 +152,19 @@ func Extract(sessions []session.Session, catalog []*skill.Skill) []Signal {
 		}
 
 		// user corrections: only after the assistant has done something
-		assistantActed := false
+		assistantActed, assistantAsked := false, false
 		for _, t := range s.Turns {
 			if t.Role != "user" {
 				if t.Role == "assistant" && (t.Text != "" || len(t.ToolCalls) > 0) {
 					assistantActed = true
+					assistantAsked = strings.HasSuffix(strings.TrimSpace(t.Text), "?")
 				}
 				continue
 			}
 			if !assistantActed {
 				continue
 			}
-			if phrase := correctionPhrase(t.Text); phrase != "" {
+			if phrase := userCorrection(t.Text, assistantAsked); phrase != "" {
 				cev := ev
 				cev.Note = "matched " + strings.TrimSpace(phrase)
 				add(KindCorrection, "correction", "user asked to redo or correct work", 4, cev)
@@ -250,11 +252,16 @@ func Extract(sessions []session.Session, catalog []*skill.Skill) []Signal {
 			sig.Weight += 2 * (len(sig.Evidence) - 1)
 		}
 	}
+	// A total order: signals come from a map, and a tie must not flip
+	// between runs (it decides the MaxSignals cut).
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Weight == out[j].Weight {
-			return out[i].Key < out[j].Key
+		if out[i].Weight != out[j].Weight {
+			return out[i].Weight > out[j].Weight
 		}
-		return out[i].Weight > out[j].Weight
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Key < out[j].Key
 	})
 	if len(out) > MaxSignals {
 		out = out[:MaxSignals]
@@ -314,6 +321,39 @@ func commandOf(tc session.ToolCall) string {
 
 // correctionPhrase returns the phrase that marks a user turn as a correction,
 // or "" when the turn is not one.
+// correctionWindow is how much of a user message is searched for a
+// correction. Corrections open a message; a pasted log or spec further down
+// ("if it fails, try again") is not one.
+const correctionWindow = 400
+
+// userCorrection finds a correction in a user turn. Injected context
+// (system reminders, attached files, skill bodies) is stripped first, and a
+// bare "no" that answers a question the assistant just asked is an answer,
+// not a correction.
+func userCorrection(text string, assistantAsked bool) string {
+	text = session.CleanPrompt(text)
+	if len(text) > correctionWindow {
+		n := correctionWindow
+		for n > 0 && !utf8.RuneStart(text[n]) {
+			n--
+		}
+		text = text[:n]
+	}
+	phrase := correctionPhrase(text)
+	if assistantAsked && isBareNo(phrase) {
+		return ""
+	}
+	return phrase
+}
+
+func isBareNo(phrase string) bool {
+	switch strings.TrimSpace(phrase) {
+	case "no", "nope", "nah":
+		return true
+	}
+	return false
+}
+
 func correctionPhrase(text string) string {
 	low := normalizeText(text)
 	if low == "" {

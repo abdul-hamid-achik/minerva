@@ -18,31 +18,43 @@ type pattern struct {
 }
 
 var patterns = []pattern{
-	// Assignments: api_key: …, SECRET = "…", token=…, password: …
-	{"key assignment", regexp.MustCompile(`(?i)((?:api[_-]?key|secret|passw(?:or)?d|token|credential)s?\s*[:=]\s*["']?)([A-Za-z0-9_\-./+=]{16,})`)},
 	// Bearer / Basic auth headers
-	{"authorization header", regexp.MustCompile(`(?i)(authorization\s*[:=]\s*["']?(?:bearer|basic)\s+)([A-Za-z0-9_\-./+=]{16,})`)},
-	// Private key blocks (whole block redacted)
-	{"private key", regexp.MustCompile(`(?s)(-----BEGIN [A-Z ]*PRIVATE KEY-----)(.*?)(-----END [A-Z ]*PRIVATE KEY-----)`)},
+	{"authorization header", regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+)([A-Za-z0-9_\-./+=]{16,})`)},
+	// Private key blocks (whole block redacted), including one cut off
+	// before its END line by a truncated tool result.
+	{"private key", regexp.MustCompile(`(?s)(-----BEGIN [A-Z ]*PRIVATE KEY-----)(.*?)(-----END [A-Z ]*PRIVATE KEY-----|\z)`)},
 	// OpenAI / Anthropic style
 	{"openai key", regexp.MustCompile(`\b(sk-(?:proj-|ant-)?)([A-Za-z0-9_\-]{20,})`)},
+	// Vendor-prefixed tokens below start at a word boundary or right after
+	// "_" (a token glued into an MCP tool name, mcp__srv_ghp_…). The first
+	// group keeps that "_".
 	// Stripe
-	{"stripe key", regexp.MustCompile(`\b((?:sk|rk|pk)_(?:live|test)_)([A-Za-z0-9]{16,})`)},
-	{"stripe webhook secret", regexp.MustCompile(`\b(whsec_)([A-Za-z0-9]{16,})`)},
+	{"stripe key", regexp.MustCompile(`(\b|_)((?:sk|rk|pk)_(?:live|test)_)([A-Za-z0-9]{16,})`)},
+	{"stripe webhook secret", regexp.MustCompile(`(\b|_)(whsec_)([A-Za-z0-9]{16,})`)},
 	// GitHub
-	{"github token", regexp.MustCompile(`\b(gh[pousr]_)([A-Za-z0-9]{20,})`)},
-	{"github fine-grained token", regexp.MustCompile(`\b(github_pat_)([A-Za-z0-9_]{20,})`)},
+	{"github token", regexp.MustCompile(`(\b|_)(gh[pousr]_)([A-Za-z0-9]{20,})`)},
+	{"github fine-grained token", regexp.MustCompile(`(\b|_)(github_pat_)([A-Za-z0-9_]{20,})`)},
 	// Slack
-	{"slack token", regexp.MustCompile(`\b(xox[baprs]-)([A-Za-z0-9-]{10,})`)},
+	{"slack token", regexp.MustCompile(`(\b|_)(xox[baprs]-)([A-Za-z0-9-]{10,})`)},
 	// AWS
-	{"aws access key", regexp.MustCompile(`\b((?:AKIA|ASIA))([0-9A-Z]{16})\b`)},
+	{"aws access key", regexp.MustCompile(`(\b|_)((?:AKIA|ASIA))([0-9A-Z]{16})\b`)},
 	// Google API key
-	{"google api key", regexp.MustCompile(`\b(AIza)([0-9A-Za-z_\-]{35})`)},
+	{"google api key", regexp.MustCompile(`(\b|_)(AIza)([0-9A-Za-z_\-]{35})`)},
+	// Hugging Face, DigitalOcean
+	{"huggingface token", regexp.MustCompile(`(\b|_)(hf_)([A-Za-z0-9]{30,})`)},
+	{"digitalocean token", regexp.MustCompile(`(\b|_)(do[opr]_v1_)([a-f0-9]{64})`)},
 	// Vercel / npm / generic vendor prefixes
-	{"vercel token", regexp.MustCompile(`\b(vercel_)([A-Za-z0-9]{20,})`)},
-	{"npm token", regexp.MustCompile(`\b(npm_)([A-Za-z0-9]{30,})`)},
+	{"vercel token", regexp.MustCompile(`(\b|_)(vercel_)([A-Za-z0-9]{20,})`)},
+	{"npm token", regexp.MustCompile(`(\b|_)(npm_)([A-Za-z0-9]{30,})`)},
 	// JWT
 	{"jwt", regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{8,}\.)([A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})`)},
+	// Generic assignments run after the vendor patterns, so a vendor token
+	// keeps its readable prefix (STRIPE_KEY: sk_live_[redacted]).
+	// Assignments: api_key: …, SECRET = "…", token=…, password: …, also as
+	// JSON keys ("aws_secret_access_key": "…") since tool args are JSON.
+	{"key assignment", regexp.MustCompile(`(?i)((?:api[_-]?key|secret|passw(?:or)?d|token|credential)[A-Za-z0-9_-]*["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-./+=]{16,})`)},
+	// A JSON password is a password even when short.
+	{"quoted password", regexp.MustCompile(`(?i)("passw(?:or)?d"\s*:\s*")([^"\s]{8,})(")`)},
 	// URLs with embedded credentials: scheme://user:pass@host
 	{"url credential", regexp.MustCompile(`([a-z][a-z0-9+.-]*://[^/\s:@]+:)([^@\s/]{4,})(@)`)},
 }
@@ -90,7 +102,7 @@ func Redact(text string) string {
 			// Secret group: last group, except for patterns that end with a
 			// closing delimiter group (private key END line, url "@").
 			secret := n
-			if p.label == "private key" || p.label == "url credential" {
+			if p.label == "private key" || p.label == "url credential" || p.label == "quoted password" {
 				secret = n - 1
 			}
 			var b strings.Builder

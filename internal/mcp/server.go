@@ -14,6 +14,7 @@ import (
 	"github.com/abdul-hamid-achik/minerva/internal/harness"
 	"github.com/abdul-hamid-achik/minerva/internal/learn"
 	"github.com/abdul-hamid-achik/minerva/internal/propose"
+	"github.com/abdul-hamid-achik/minerva/internal/secret"
 	"github.com/abdul-hamid-achik/minerva/internal/session"
 	"github.com/abdul-hamid-achik/minerva/internal/signal"
 	"github.com/abdul-hamid-achik/minerva/internal/skill"
@@ -235,6 +236,9 @@ func (s *Server) handleSkill(ctx context.Context, _ *sdkmcp.CallToolRequest, in 
 		if !ok {
 			return errorResult(fmt.Sprintf("skill %q not found", in.Name)), nil, nil
 		}
+		// A skill body can hold a secret (lint flags it); never hand it to
+		// the model verbatim.
+		content = secret.Redact(content)
 		return textResult(content), map[string]any{"name": in.Name, "content": content}, nil
 	case "compare":
 		a, okA := s.skillManager.Load(in.NameA)
@@ -245,6 +249,7 @@ func (s *Server) handleSkill(ctx context.Context, _ *sdkmcp.CallToolRequest, in 
 		if !okB {
 			return errorResult(fmt.Sprintf("skill %q not found", in.NameB)), nil, nil
 		}
+		a, b = secret.Redact(a), secret.Redact(b)
 		if in.SideBySide {
 			result := map[string]any{"skill_a": a, "skill_b": b}
 			return textResult(result), result, nil

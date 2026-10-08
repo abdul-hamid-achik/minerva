@@ -340,12 +340,10 @@ func TestSync_NeverWritesNativeHarnesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := harness.Env{Home: home, AgentsDir: agents}
-	acts, err := Sync(SyncOptions{Env: env, To: []string{harness.OMP, harness.Sonar}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(acts) != 0 {
-		t.Fatalf("native readers must not be synced into: %#v", acts)
+	for _, id := range []string{harness.OMP, harness.Sonar} {
+		if acts, err := Sync(SyncOptions{Env: env, To: []string{id}}); err == nil || len(acts) != 0 {
+			t.Fatalf("--to %s: acts=%#v err=%v, want an error and no actions", id, acts, err)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(home, ".omp")); !os.IsNotExist(err) {
 		t.Fatalf("sync created ~/.omp: %v", err)

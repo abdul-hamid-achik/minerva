@@ -1,6 +1,9 @@
 package skill
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func testSkill(name, desc string) *Skill {
 	return &Skill{Name: name, Description: desc, Content: desc}
@@ -77,5 +80,25 @@ func TestResolve_EmptyQuery(t *testing.T) {
 	got := Resolve("   ", nil)
 	if len(got.Hits) != 0 {
 		t.Fatalf("%#v", got)
+	}
+}
+
+func TestResolve_ExactNameSurvivesCommonTerms(t *testing.T) {
+	var skills []*Skill
+	for _, n := range []string{"docker-workflow", "git-workflow", "aws-workflow", "go-workflow", "node-workflow", "docs"} {
+		skills = append(skills, &Skill{Name: n, Description: "Use when running repeated " + n + " commands with docker"})
+	}
+	for _, q := range []string{"docker-workflow", "docker workflow"} {
+		res := Resolve(q, skills)
+		if len(res.Hits) == 0 || res.Hits[0].Name != "docker-workflow" {
+			t.Fatalf("Resolve(%q) = %+v, want docker-workflow first", q, res.Hits)
+		}
+	}
+}
+
+func TestResolve_RedactsEchoedQuery(t *testing.T) {
+	res := Resolve("deploy with ghp_abcdefghijklmnopqrstuvwxyz0123456789", nil)
+	if strings.Contains(res.Query, "abcdefghijklmnop") {
+		t.Fatalf("query echoed a token: %q", res.Query)
 	}
 }

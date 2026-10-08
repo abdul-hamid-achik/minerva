@@ -60,7 +60,7 @@ type Session struct {
 	Path      string    `json:"path"`
 	Workspace string    `json:"workspace,omitempty"`
 	Model     string    `json:"model,omitempty"`
-	StartedAt time.Time `json:"started_at,omitempty"`
+	StartedAt time.Time `json:"started_at,omitzero"`
 	MTime     time.Time `json:"mtime"`
 	Turns     []Turn    `json:"turns,omitempty"`
 	TurnCount int       `json:"turn_count"`
@@ -94,10 +94,16 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 // listStubs lists sessions from their files alone. It applies every filter
 // but Workspace.
 func listStubs(env harness.Env, filter Filter) ([]Session, error) {
-	var out []Session
+	if filter.Harness != "" && harness.Get(env, filter.Harness) == nil {
+		return nil, fmt.Errorf("unknown harness %q (known: %s)", filter.Harness, strings.Join(harness.IDs(env), ", "))
+	}
+	out := []Session{} // JSON [] rather than null
 	for _, h := range harness.Catalog(env) {
 		if filter.Harness != "" && h.ID != filter.Harness {
 			continue
+		}
+		if h.ID == harness.Sonar {
+			continue // no transcript parser yet: listing it would only add empty sessions
 		}
 		for _, g := range h.SessionGlobs {
 			matches, _ := filepath.Glob(g)
@@ -107,7 +113,11 @@ func listStubs(env harness.Env, filter Filter) ([]Session, error) {
 					continue
 				}
 				if st.IsDir() {
-					// directory sources (opencode/copilot): keep as a stub session
+					// directory sources (opencode/copilot): keep as a stub session.
+					// A Copilot session dir without events.jsonl has no turns.
+					if h.ID == harness.Copilot && !fileExists(filepath.Join(p, "events.jsonl")) {
+						continue
+					}
 					id := filepath.Base(p)
 					sess := Session{Harness: h.ID, ID: id, Path: p, MTime: st.ModTime()}
 					if keep(env, filter, sess) {
@@ -128,12 +138,6 @@ func listStubs(env harness.Env, filter Filter) ([]Session, error) {
 					continue
 				}
 				if !strings.HasSuffix(strings.ToLower(p), ".jsonl") && !strings.HasSuffix(strings.ToLower(p), ".json") {
-					if filepath.Base(p) == "sonar.db" {
-						sess := Session{Harness: h.ID, ID: "sonar.db", Path: p, MTime: st.ModTime()}
-						if keep(env, filter, sess) {
-							out = append(out, sess)
-						}
-					}
 					continue
 				}
 				id := sessionIDFromPath(h.ID, p)
@@ -247,7 +251,7 @@ func LoadFiltered(env harness.Env, filter Filter) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Session
+	out := []Session{}
 	for _, m := range meta {
 		if filter.Limit > 0 && len(out) >= filter.Limit {
 			break
@@ -417,6 +421,7 @@ func RedactSession(s *Session) {
 	for i := range s.Turns {
 		s.Turns[i].Text = secret.Redact(s.Turns[i].Text)
 		for j := range s.Turns[i].ToolCalls {
+			s.Turns[i].ToolCalls[j].Name = secret.Redact(s.Turns[i].ToolCalls[j].Name)
 			s.Turns[i].ToolCalls[j].Args = secret.Redact(s.Turns[i].ToolCalls[j].Args)
 			s.Turns[i].ToolCalls[j].Result = secret.Redact(s.Turns[i].ToolCalls[j].Result)
 		}
@@ -761,4 +766,9 @@ func capPrompt(p string) string {
 		}
 	}
 	return p
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }
