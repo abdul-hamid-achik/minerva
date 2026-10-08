@@ -453,25 +453,143 @@ func (m *Manager) Update(name string, description *string, content *string) erro
 	if path == "" {
 		return fmt.Errorf("skill %q has no path on disk", name)
 	}
-	if err := writeSkillFile(path, name, desc, body); err != nil {
+	if err := rewriteSkillFile(path, name, description, body); err != nil {
 		return err
 	}
 	return m.LoadAll()
 }
 
+// rewriteSkillFile replaces the body of an existing SKILL.md and, when
+// description is set, its description. Every other frontmatter key
+// (allowed-tools, license, metadata, …) and its comments are kept. A file
+// without frontmatter gets a fresh one.
+func rewriteSkillFile(path, name string, description *string, body string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read skill file: %w", err)
+	}
+	fm, ok := splitFrontmatter(string(raw))
+	if !ok {
+		desc := ""
+		if description != nil {
+			desc = *description
+		}
+		return writeSkillFile(path, name, desc, body)
+	}
+	if description != nil {
+		if fm, err = setFrontmatterKey(fm, "description", *description); err != nil {
+			return fmt.Errorf("update frontmatter: %w", err)
+		}
+	}
+	return writeSkill(path, fm, body)
+}
+
 func writeSkillFile(path, name, description, content string) error {
 	var b strings.Builder
-	b.WriteString("---\n")
 	fmt.Fprintf(&b, "name: %q\n", name)
 	if description != "" {
 		fmt.Fprintf(&b, "description: %q\n", description)
 	}
+	return writeSkill(path, b.String(), content)
+}
+
+// splitFrontmatter returns the YAML between a leading "---" line and the
+// next "---" line, or false when the file has no complete frontmatter.
+func splitFrontmatter(data string) (string, bool) {
+	lines := strings.SplitAfter(data, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", false
+	}
+	var fm strings.Builder
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "---" {
+			return fm.String(), true
+		}
+		fm.WriteString(line)
+	}
+	return "", false
+}
+
+// setFrontmatterKey sets key to a string value in frontmatter YAML, keeping
+// every other key, their order and comments. An empty value removes key.
+func setFrontmatterKey(fm, key, value string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(fm), &doc); err != nil {
+		return "", err
+	}
+	if doc.Kind == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	}
+	m := doc.Content[0]
+	if m.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("frontmatter is not a mapping")
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value != key {
+			continue
+		}
+		if value == "" {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+		} else {
+			m.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: yaml.DoubleQuotedStyle}
+		}
+		return encodeYAML(&doc)
+	}
+	if value != "" {
+		m.Content = append(m.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: yaml.DoubleQuotedStyle})
+	}
+	return encodeYAML(&doc)
+}
+
+func encodeYAML(doc *yaml.Node) (string, error) {
+	var b strings.Builder
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
+		return "", err
+	}
+	if err := enc.Close(); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+// WriteFileAtomic writes data to a temp file next to path and renames it
+// over path, so a reader never sees a half-written file and a symlink at
+// path is replaced rather than written through.
+func WriteFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op once renamed
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// writeSkill writes "---", the frontmatter (YAML ending in a newline), "---",
+// a blank line and the body.
+func writeSkill(path, frontmatter, body string) error {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString(frontmatter)
 	b.WriteString("---\n\n")
-	b.WriteString(content)
-	if !strings.HasSuffix(content, "\n") {
+	b.WriteString(body)
+	if !strings.HasSuffix(body, "\n") {
 		b.WriteString("\n")
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if err := WriteFileAtomic(path, []byte(b.String())); err != nil {
 		return fmt.Errorf("write skill file: %w", err)
 	}
 	return nil

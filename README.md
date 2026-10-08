@@ -88,7 +88,8 @@ minerva mcp serve
 
 Eight tools: `minerva_learn`, `minerva_sessions`, `minerva_analyze`,
 `minerva_propose`, `minerva_resolve_skill`, `minerva_skill`,
-`minerva_harness`, `minerva_apply`. Only `minerva_apply` writes disk.
+`minerva_harness`, `minerva_apply`. Only `minerva_apply` writes skills;
+`minerva_propose` saves its drafts to `~/.agents/.minerva/proposals.json`.
 
 Wire via MCPHub:
 

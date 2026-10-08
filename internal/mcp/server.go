@@ -102,7 +102,7 @@ func (s *Server) register() {
 }
 
 func toolSpec(tool surface.ProductTool) *sdkmcp.Tool {
-	destructive := !tool.ReadOnly
+	destructive := tool.Destructive
 	openWorld := false
 	return &sdkmcp.Tool{
 		Name: tool.Name, Title: tool.Title, Description: tool.Description,

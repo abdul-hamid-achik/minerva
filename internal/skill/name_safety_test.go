@@ -3,6 +3,7 @@ package skill
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -120,5 +121,43 @@ func TestLoadAll_OneBadSkillDoesNotHideTheRest(t *testing.T) {
 	}
 	if len(mgr.Problems()) != 2 {
 		t.Fatalf("problems = %v, want broken YAML and duplicate", mgr.Problems())
+	}
+}
+
+func TestUpdate_KeepsOtherFrontmatterKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "skills", "tools", "SKILL.md")
+	writeFile(t, path, "---\nname: tools\n# owned by the platform team\ndescription: old\nallowed-tools: [Bash, Read]\nlicense: MIT\nmetadata:\n  version: 2\n---\n\nold body\n")
+	mgr := ForAgents(dir)
+	if err := mgr.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	desc, body := "new description", "new body\n"
+	if err := mgr.Update("tools", &desc, &body); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	for _, want := range []string{"allowed-tools:", "license: MIT", "version: 2", "# owned by the platform team", `description: "new description"`, "\nnew body\n"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "old body") || strings.Contains(got, "description: old") {
+		t.Fatalf("old content left:\n%s", got)
+	}
+	s := mgr.Get("tools")
+	if s == nil || s.Description != desc || s.Content != "new body" && s.Content != "new body\n" {
+		t.Fatalf("reloaded skill = %+v", s)
+	}
+
+	// A body-only update leaves the description line untouched.
+	body = "third\n"
+	if err := mgr.Update("tools", nil, &body); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), `description: "new description"`) || !strings.Contains(string(data), "license: MIT") {
+		t.Fatalf("body-only update changed frontmatter:\n%s", data)
 	}
 }

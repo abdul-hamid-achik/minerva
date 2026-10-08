@@ -98,8 +98,8 @@ func TestServer_ToolsMatchContract(t *testing.T) {
 		if got.Annotations == nil || got.Annotations.ReadOnlyHint != w.ReadOnly {
 			t.Fatalf("%s: read-only hint mismatch: %#v", w.Name, got.Annotations)
 		}
-		if w.Name == "minerva_apply" && (got.Annotations.DestructiveHint == nil || !*got.Annotations.DestructiveHint) {
-			t.Fatal("minerva_apply must be marked destructive")
+		if got.Annotations.DestructiveHint == nil || *got.Annotations.DestructiveHint != w.Destructive {
+			t.Fatalf("%s: destructive hint mismatch: %#v", w.Name, got.Annotations)
 		}
 	}
 }

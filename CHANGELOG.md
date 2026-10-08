@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (category folders). They no longer show up as `extra`
 - `retry_loop` needs the same command (for shell tools), not just the same
   tool, and one session can add at most `PerSessionCap` to it
+- `proposals.json` keeps the latest 100 proposals across runs (newest first)
+  instead of only the last run, so an id printed earlier still applies after
+  a narrower or empty `propose`; it is replaced atomically
+- MCP: `minerva_propose` is no longer annotated read-only (it saves drafts);
+  only `minerva_apply` is marked destructive
 
 ### Fixed
 
@@ -47,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   not the plugin; Hermes `skill_manage` no longer counts as a load
 - Long tool arguments stay valid JSON, so long shell commands keep their
   command
+- One duplicate or unparsable `SKILL.md` no longer breaks the whole library:
+  it is skipped with a warning (and reported by `skill lint`). `mcp serve`
+  starts anyway, and `analyze`/`propose` no longer run with a silently empty
+  catalog
+- `skill update` and `propose apply` keep every frontmatter key
+  (`allowed-tools`, `license`, `metadata`, comments), not only `name` and
+  `description`; SKILL.md files are written atomically
 
 ## [1.1.0] - 2026-09-01
 

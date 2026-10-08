@@ -19,7 +19,9 @@ Compact stdio surface for MCPHub / Claude Code / Cursor / Codex.
 | `minerva_harness` | `action=list\|doctor` |
 | `minerva_apply` | Write a proposal id to `~/.agents/skills` |
 
-Only `minerva_apply` mutates disk. Gate it.
+`minerva_apply` is the only tool that writes skills, and the only one marked
+destructive. Gate it. `minerva_propose` also writes: it adds its drafts to
+`~/.agents/.minerva/proposals.json` so `minerva_apply` can find them by id.
 
 ## MCPHub
 

@@ -165,3 +165,34 @@ func TestLoadGapNotApplyable(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestSave_KeepsEarlierIDsAndReplacesSameID(t *testing.T) {
+	dir := t.TempDir()
+	a := Proposal{ID: "new_skill-aaaa", Kind: KindNew, Name: "a", Title: "first"}
+	b := Proposal{ID: "new_skill-bbbb", Kind: KindNew, Name: "b"}
+	if err := Save(dir, []Proposal{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	// A narrower run with nothing to propose must not drop printed ids.
+	if err := Save(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Find(dir, b.ID); err != nil {
+		t.Fatalf("empty run dropped %s: %v", b.ID, err)
+	}
+	a.Title = "refreshed"
+	if err := Save(dir, []Proposal{a}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := LoadStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Proposals) != 2 || st.Proposals[0].ID != a.ID || st.Proposals[0].Title != "refreshed" {
+		t.Fatalf("store = %+v", st.Proposals)
+	}
+	entries, _ := os.ReadDir(filepath.Join(dir, ".minerva"))
+	if len(entries) != 1 {
+		t.Fatalf("temp files left behind: %v", entries)
+	}
+}

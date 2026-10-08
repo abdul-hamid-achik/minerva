@@ -1,8 +1,9 @@
 # Proposals
 
 `minerva propose` (and `minerva_propose`) turns [signals](/guide/concepts)
-into a ranked list. The last run is stored at
-`~/.agents/.minerva/proposals.json`.
+into a ranked list. Proposals are kept in `~/.agents/.minerva/proposals.json`
+(the latest 100, newest first), so an id printed by an earlier run still
+applies after a narrower or empty run.
 
 | Kind | Meaning | Apply? |
 |------|---------|--------|
