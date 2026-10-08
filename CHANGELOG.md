@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-08
+
+### Added
+
+- Sessions report `skipped_lines`: transcript lines that could not be read
+  (longer than 8 MB, or not JSON), so a partly parsed session is visible in
+  `--json` output
+
+### Fixed
+
+- OpenCode session and message ids read from storage files can no longer
+  point outside the storage directory (an id such as `../..` made Minerva read
+  JSON files elsewhere on disk); such ids fall back to the file name
+- Sessions with the same modification time are ordered by harness, id and
+  path, so `--limit` returns the same sessions on every run
+
 ## [1.2.0] - 2026-10-08
 
 Correctness pass from a full code review: tool results matched to their call
@@ -209,6 +225,7 @@ Operator control plane release (superseded by the unreleased pivot).
 
 Initial public release.
 
+[1.2.1]: https://github.com/abdul-hamid-achik/minerva/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/abdul-hamid-achik/minerva/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/abdul-hamid-achik/minerva/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/abdul-hamid-achik/minerva/compare/v0.2.0...v1.0.0
