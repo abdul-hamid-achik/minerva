@@ -162,6 +162,10 @@ func Load(s Session) (Session, error) {
 		return parseCopilot(s)
 	case harness.Gemini:
 		return parseGemini(s)
+	case harness.Hermes:
+		return parseHermes(s)
+	case harness.OMP:
+		return parseOMP(s)
 	default:
 		return s, nil
 	}

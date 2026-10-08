@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Hermes Agent harness (`hermes`): skills synced by symlink into
+  `~/.hermes/skills`, sessions read from `~/.hermes/sessions/*.jsonl`
+- oh-my-pi harness (`omp`): modelled as a native reader of
+  `~/.agents/skills` (never synced into); sessions read from
+  `~/.omp/agent/sessions/*/*.jsonl`
+- `harness.Harness.Native` and `PresenceDirs`: native readers are present only
+  when their own data exists, not because `~/.agents/skills` does
+
+### Changed
+
+- `sonar` is now present only when `~/.sonar` (or its sessions) exists, no
+  longer whenever `~/.agents/skills` exists
+- `harness doctor` and `skill sync` ignore harness-owned entries in a skills
+  dir: dot-entries, `_shared`, and real directories without a `SKILL.md`
+  (category folders). They no longer show up as `extra`
+
 ## [1.1.0] - 2026-09-01
 
 Signal quality pass: fewer, better proposals from real sessions.

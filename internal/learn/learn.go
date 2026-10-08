@@ -14,7 +14,7 @@ type Brief struct {
 
 const thesis = "Minerva reads agent-harness conversations and tool calls, proposes skills from those traces, and keeps SKILL.md libraries in sync across harnesses. It is not a second agent runtime, not Cortex, and not a stack monitor."
 
-const how = "Point Minerva at Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini, or sonar session files. Analyze extracts deterministic signals (retries, corrections, load-gaps). Propose writes SKILL.md drafts. Sync links the canonical ~/.agents/skills tree into each writable harness."
+const how = "Point Minerva at Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini, Hermes Agent, oh-my-pi (omp), or sonar session files. Analyze extracts deterministic signals (retries, corrections, load-gaps). Propose writes SKILL.md drafts. Sync links the canonical ~/.agents/skills tree into each writable harness."
 
 // Build returns a cheap onboarding brief.
 func Build() Brief {

@@ -94,8 +94,8 @@ func Doctor(env harness.Env) ([]Finding, error) {
 
 	var out []Finding
 	for _, h := range harness.Catalog(env) {
-		if h.ID == harness.Sonar {
-			continue
+		if h.Native {
+			continue // reads ~/.agents/skills directly; nothing to compare
 		}
 		if !dirExists(h.SkillsDir) {
 			if h.Present {
@@ -220,6 +220,12 @@ func Sync(opts SyncOptions) ([]Action, error) {
 				method = MethodSymlink
 			}
 			act := Action{Harness: h.ID, Skill: s.Name, Method: method, From: src, To: dst}
+			if reason := unsyncable(s, dst, h.SkillsDir); reason != "" {
+				act.Method = MethodSkip
+				act.Reason = reason
+				actions = append(actions, act)
+				continue
+			}
 			state := inspectDest(src, dst)
 			if state == destDiverged && !opts.Force {
 				act.Method = MethodSkip
@@ -242,6 +248,22 @@ func Sync(opts SyncOptions) ([]Action, error) {
 		}
 	}
 	return actions, nil
+}
+
+// unsyncable explains why s cannot be placed at dst, or returns "". A flat
+// <name>.md skill has the whole library as its folder, and a name that is not
+// a single path element would place it outside the harness skills dir.
+func unsyncable(s *skill.Skill, dst, skillsDir string) string {
+	if skill.IsFlat(s) {
+		return "flat .md skill; move it to <name>/SKILL.md to sync it"
+	}
+	if err := skill.ValidateName(s.Name); err != nil {
+		return "invalid skill name: " + err.Error()
+	}
+	if filepath.Dir(dst) != filepath.Clean(skillsDir) {
+		return "skill name escapes the harness skills dir"
+	}
+	return ""
 }
 
 type destState int
@@ -305,6 +327,11 @@ func copyDir(src, dst string) error {
 		if info.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
+		// Following a link would copy whatever it points at (e.g. a key from
+		// the user's home) into the skill and then into every harness.
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to copy %s: not a regular file", path)
+		}
 		return copyFile(path, target)
 	})
 }
@@ -340,6 +367,11 @@ func Install(agentsDir, spec string, force bool) (string, error) {
 		return "", fmt.Errorf("install spec must be owner/repo or owner/repo/path")
 	}
 	owner, repo := parts[0], parts[1]
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." || strings.Contains(p, `\`) {
+			return "", fmt.Errorf("install spec %q has an invalid path element %q", spec, p)
+		}
+	}
 	sub := ""
 	if len(parts) > 2 {
 		sub = strings.Join(parts[2:], "/")
@@ -362,6 +394,12 @@ func Install(agentsDir, spec string, force bool) (string, error) {
 	skillRoot, name, skillMD, err := findSkill(search, tmp)
 	if err != nil {
 		return "", err
+	}
+	if skillRoot == tmp {
+		name = repo // SKILL.md at the repo root: the temp dir name means nothing
+	}
+	if err := skill.ValidateName(name); err != nil {
+		return "", fmt.Errorf("installed skill folder %q: %w", name, err)
 	}
 	lf, err := LoadLock(agentsDir)
 	if err != nil {
@@ -477,14 +515,40 @@ func listSkillNames(dir string) ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
+		if isHarnessOwnedEntry(e.Name()) {
 			continue
 		}
-		if e.IsDir() || (e.Type()&os.ModeSymlink != 0) {
+		switch {
+		case e.Type()&os.ModeSymlink != 0:
+			// Keep links (even broken ones) so doctor can report them.
+			names = append(names, e.Name())
+		case e.IsDir() && hasSkillFile(filepath.Join(dir, e.Name())):
 			names = append(names, e.Name())
 		}
 	}
 	return names, nil
+}
+
+// isHarnessOwnedEntry reports names a harness keeps in its skills dir for its
+// own bookkeeping (dot-entries such as .archive or .bundled_manifest, and
+// Hermes's _shared). They are never skills and never touched.
+func isHarnessOwnedEntry(name string) bool {
+	return strings.HasPrefix(name, ".") || name == "_shared"
+}
+
+// hasSkillFile reports whether dir directly contains SKILL.md. Category
+// folders (Hermes groups skills in them) are not skills themselves.
+func hasSkillFile(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.EqualFold(e.Name(), "SKILL.md") {
+			return true
+		}
+	}
+	return false
 }
 
 func dirExists(path string) bool {

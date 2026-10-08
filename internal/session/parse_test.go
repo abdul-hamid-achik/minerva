@@ -155,3 +155,100 @@ func TestList_FilterHarness(t *testing.T) {
 		t.Fatalf("got %d", len(got))
 	}
 }
+
+func TestParseHermes(t *testing.T) {
+	s, err := Load(Session{Harness: harness.Hermes, Path: filepath.Join("testdata", "hermes", "sess-hermes-1.jsonl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summarize(&s)
+	if s.ID != "sess-hermes-1" || s.Model != "test-model" || s.StartedAt.IsZero() {
+		t.Fatalf("meta: id=%q model=%q start=%v", s.ID, s.Model, s.StartedAt)
+	}
+	if s.TurnCount != 3 || s.ToolCount != 2 {
+		t.Fatalf("turns=%d tools=%d: %#v", s.TurnCount, s.ToolCount, s.Turns)
+	}
+	if s.FirstUserPrompt() != "run the tests and load the demo skill" {
+		t.Fatalf("prompt=%q", s.FirstUserPrompt())
+	}
+	sh := s.Turns[1].ToolCalls[0]
+	if sh.Category != CatShell || sh.Command != "go" || !sh.IsError || sh.Result == "" {
+		t.Fatalf("shell call: %#v", sh)
+	}
+	if sk := s.Turns[1].ToolCalls[1]; sk.IsError || sk.Category != CatSkill {
+		t.Fatalf("skill call: %#v", sk)
+	}
+	if len(s.Skills) != 1 || s.Skills[0] != "demo" {
+		t.Fatalf("skills=%v", s.Skills)
+	}
+}
+
+func TestParseOMP(t *testing.T) {
+	s, err := Load(Session{Harness: harness.OMP, Path: filepath.Join("testdata", "omp", "session.jsonl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summarize(&s)
+	if s.ID != "omp-sess-1" || s.Workspace != "/work/demo" || s.Model != "claude-test" || s.StartedAt.IsZero() {
+		t.Fatalf("meta: id=%q ws=%q model=%q", s.ID, s.Workspace, s.Model)
+	}
+	// user, assistant(2 tool calls), assistant("done"); the empty error turn is dropped.
+	if s.TurnCount != 3 || s.ToolCount != 2 {
+		t.Fatalf("turns=%d tools=%d: %#v", s.TurnCount, s.ToolCount, s.Turns)
+	}
+	if s.FirstUserPrompt() != "fix the failing tests" {
+		t.Fatalf("prompt=%q", s.FirstUserPrompt())
+	}
+	asst := s.Turns[1]
+	if asst.Text != "running" {
+		t.Fatalf("thinking must not leak into text: %q", asst.Text)
+	}
+	sh := asst.ToolCalls[0]
+	if sh.Category != CatShell || sh.Command != "go" || !sh.IsError || sh.Result != "FAIL" {
+		t.Fatalf("shell call: %#v", sh)
+	}
+	if rd := asst.ToolCalls[1]; rd.Category != CatRead || rd.IsError {
+		t.Fatalf("read call: %#v", rd)
+	}
+}
+
+func TestList_HermesAndOMPGlobs(t *testing.T) {
+	home := t.TempDir()
+	hdir := filepath.Join(home, ".hermes", "sessions")
+	odir := filepath.Join(home, ".omp", "agent", "sessions", "-work-demo")
+	for _, d := range []string{hdir, filepath.Join(odir, "sub-artifacts")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile := func(src, dst string) {
+		b, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile(filepath.Join("testdata", "hermes", "sess-hermes-1.jsonl"), filepath.Join(hdir, "20260718_100000_abc.jsonl"))
+	// Not transcripts: legacy snapshot, index, request dump.
+	for _, n := range []string{"session_x.json", "sessions.json", "request_dump_x.json"} {
+		if err := os.WriteFile(filepath.Join(hdir, n), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile(filepath.Join("testdata", "omp", "session.jsonl"), filepath.Join(odir, "2026-07-18T10-00-00-000Z_abc.jsonl"))
+	if err := os.WriteFile(filepath.Join(odir, "sub-artifacts", "1.bash-original.log"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := harness.Env{Home: home, AgentsDir: filepath.Join(home, ".agents")}
+	for _, id := range []string{harness.Hermes, harness.OMP} {
+		got, err := List(env, Filter{Harness: id, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].Harness != id {
+			t.Fatalf("%s: got %#v", id, got)
+		}
+	}
+}

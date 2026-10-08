@@ -1,0 +1,9 @@
+{"type":"session","version":3,"id":"omp-sess-1","timestamp":"2026-07-18T10:00:00.000Z","cwd":"/work/demo","title":"demo"}
+{"type":"model_change","id":"a1","model":"x/y","timestamp":"2026-07-18T10:00:00.100Z"}
+{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"fix the failing tests"}],"timestamp":1}}
+{"type":"message","id":"m2","message":{"role":"assistant","model":"claude-test","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"running"},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"go test ./..."}},{"type":"toolCall","id":"t2","name":"read","arguments":{"path":"skill://demo"}}]}}
+{"type":"message","id":"m3","message":{"role":"toolResult","toolCallId":"t1","toolName":"bash","isError":true,"content":[{"type":"text","text":"FAIL"}]}}
+{"type":"message","id":"m4","message":{"role":"toolResult","toolCallId":"t2","toolName":"read","isError":false,"content":[{"type":"text","text":"ok"}]}}
+{"type":"title","title":"demo","v":1}
+{"type":"message","id":"m5","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"boom"}}
+{"type":"message","id":"m6","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
