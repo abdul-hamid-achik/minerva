@@ -64,7 +64,7 @@ func saveLock(agentsDir string, lf LockFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(lockPath(agentsDir), data, 0o644)
+	return skill.WriteFileAtomic(lockPath(agentsDir), data)
 }
 
 // Finding is one doctor issue.
@@ -112,6 +112,10 @@ func Doctor(env harness.Env) ([]Finding, error) {
 		for _, name := range names {
 			have[name] = true
 			if _, ok := canonical[name]; !ok {
+				if target, dangling := danglingLink(filepath.Join(h.SkillsDir, name)); dangling {
+					out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "broken-link", Message: "symlink target missing: " + target})
+					continue
+				}
 				out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "extra", Message: "present in harness but not in ~/.agents/skills"})
 				continue
 			}
@@ -130,8 +134,12 @@ func Doctor(env harness.Env) ([]Finding, error) {
 				}
 				continue
 			}
-			hash, _ := FolderHash(entry)
-			if canonical[name] != "" && hash != "" && hash != canonical[name] {
+			hash, err := FolderHash(entry)
+			if err != nil {
+				out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "error", Message: "cannot read harness copy: " + err.Error()})
+				continue
+			}
+			if canonical[name] != "" && hash != canonical[name] {
 				out = append(out, Finding{Harness: h.ID, Skill: name, Kind: "drift", Message: "folder hash differs from ~/.agents/skills"})
 			}
 		}
@@ -179,25 +187,26 @@ const (
 	MethodSkip    = "skip"
 )
 
-// ReasonDiverged marks a harness-local directory that Minerva did not write
-// and whose contents differ from ~/.agents/skills.
-const ReasonDiverged = "harness copy differs from ~/.agents/skills; re-run with --force to replace"
-
 // Sync links or copies canonical skills into writable harness dirs.
 //
-// Destinations that are symlinks (Minerva-owned) or byte-identical copies are
-// replaced freely. A real directory with different contents is the harness's
-// own work: it is skipped with ReasonDiverged unless opts.Force. Dry-run
-// touches nothing, not even the harness skills dir.
+// Without opts.To only harnesses that are installed are synced; naming a
+// harness that is unknown or not a sync target is an error. Destinations
+// that are Minerva's own (a link into ~/.agents/skills, or a byte-identical
+// copy) are replaced freely. A real directory with different contents, or a
+// link pointing somewhere else, is the user's or the harness's own work: it
+// is skipped unless opts.Force. A directory without a SKILL.md (a harness
+// category folder) is never replaced. Dry-run touches nothing, not even the
+// harness skills dir.
 func Sync(opts SyncOptions) ([]Action, error) {
 	mgr := skill.ForAgents(opts.Env.AgentsDir)
 	if err := mgr.LoadAll(); err != nil {
 		return nil, err
 	}
-	want := map[string]bool{}
-	for _, id := range opts.To {
-		want[strings.ToLower(id)] = true
+	want, err := syncTargets(opts.Env, opts.To)
+	if err != nil {
+		return nil, err
 	}
+	library := filepath.Join(opts.Env.AgentsDir, "skills")
 
 	var actions []Action
 	for _, h := range harness.Catalog(opts.Env) {
@@ -206,6 +215,9 @@ func Sync(opts SyncOptions) ([]Action, error) {
 		}
 		if len(want) > 0 && !want[h.ID] {
 			continue
+		}
+		if len(want) == 0 && !h.Present && !dirExists(filepath.Dir(h.SkillsDir)) {
+			continue // not installed (no ~/.claude, ~/.codex, …): create nothing
 		}
 		if !opts.DryRun {
 			if err := os.MkdirAll(h.SkillsDir, 0o755); err != nil {
@@ -226,15 +238,27 @@ func Sync(opts SyncOptions) ([]Action, error) {
 				actions = append(actions, act)
 				continue
 			}
-			state := inspectDest(src, dst)
-			if state == destDiverged && !opts.Force {
+			state := inspectDest(src, dst, library)
+			reason := ""
+			switch state {
+			case destForeignDir:
 				act.Method = MethodSkip
-				act.Reason = ReasonDiverged
+				act.Reason = ReasonForeignDir
+				actions = append(actions, act)
+				continue
+			case destDiverged:
+				reason = ReasonDiverged
+			case destForeignLink:
+				reason = ReasonForeignLink
+			}
+			if reason != "" && !opts.Force {
+				act.Method = MethodSkip
+				act.Reason = reason
 				actions = append(actions, act)
 				continue
 			}
-			if state == destDiverged {
-				act.Reason = "replaced diverged harness copy (--force)"
+			if reason != "" {
+				act.Reason = "replaced (--force): " + reason
 			}
 			if opts.DryRun {
 				actions = append(actions, act)
@@ -248,6 +272,29 @@ func Sync(opts SyncOptions) ([]Action, error) {
 		}
 	}
 	return actions, nil
+}
+
+// syncTargets validates --to ids. It returns nil for "every installed
+// harness".
+func syncTargets(env harness.Env, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	want := map[string]bool{}
+	for _, raw := range ids {
+		id := strings.ToLower(strings.TrimSpace(raw))
+		h := harness.Get(env, id)
+		switch {
+		case h == nil:
+			return nil, fmt.Errorf("unknown harness %q (known: %s)", raw, strings.Join(harness.IDs(env), ", "))
+		case h.Native:
+			return nil, fmt.Errorf("%s reads ~/.agents/skills directly; there is nothing to sync into it", id)
+		case !h.SyncWritable:
+			return nil, fmt.Errorf("%s owns its skills dir (%s); Minerva never writes there", id, h.SkillsDir)
+		}
+		want[id] = true
+	}
+	return want, nil
 }
 
 // unsyncable explains why s cannot be placed at dst, or returns "". A flat
@@ -270,22 +317,50 @@ type destState int
 
 const (
 	destAbsent destState = iota
-	destLink
+	destLink             // a link into the library, or a dangling one: Minerva's
 	destIdentical
-	destDiverged
+	destDiverged    // a different copy, or a stray file
+	destForeignLink // a link to somewhere outside the library
+	destForeignDir  // a directory without SKILL.md: not a skill at all
 )
 
-// inspectDest classifies what is currently at dst relative to src.
-func inspectDest(src, dst string) destState {
+// Skip reasons.
+const (
+	// ReasonDiverged marks a harness-local copy that Minerva did not write
+	// and whose contents differ from ~/.agents/skills.
+	ReasonDiverged    = "harness copy differs from ~/.agents/skills; re-run with --force to replace"
+	ReasonForeignLink = "symlink points outside ~/.agents/skills; re-run with --force to replace"
+	ReasonForeignDir  = "harness folder without SKILL.md (e.g. a category); never replaced"
+)
+
+// inspectDest classifies what is currently at dst relative to src. library
+// is the canonical skills dir links are expected to point into.
+func inspectDest(src, dst, library string) destState {
 	st, err := os.Lstat(dst)
 	if err != nil {
 		return destAbsent
 	}
 	if st.Mode()&os.ModeSymlink != 0 {
-		return destLink
+		target, err := os.Readlink(dst)
+		if err != nil {
+			return destForeignLink
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(dst), target)
+		}
+		if _, err := os.Stat(target); err != nil {
+			return destLink // dangling: nothing to lose
+		}
+		if within(target, library) {
+			return destLink
+		}
+		return destForeignLink
 	}
 	if !st.IsDir() {
 		return destDiverged // a stray file with the skill's name
+	}
+	if !hasSkillFile(dst) {
+		return destForeignDir
 	}
 	want, err1 := FolderHash(src)
 	have, err2 := FolderHash(dst)
@@ -293,6 +368,17 @@ func inspectDest(src, dst string) destState {
 		return destDiverged
 	}
 	return destIdentical
+}
+
+// within reports whether path is dir or inside it.
+func within(path, dir string) bool {
+	abs, err1 := filepath.Abs(path)
+	root, err2 := filepath.Abs(dir)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, abs)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func place(src, dst, method string) error {
@@ -325,6 +411,9 @@ func copyDir(src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
+			if info.Name() == ".git" && path != src {
+				return filepath.SkipDir // a cloned repo's history is not part of the skill
+			}
 			return os.MkdirAll(target, 0o755)
 		}
 		// Following a link would copy whatever it points at (e.g. a key from
@@ -411,13 +500,7 @@ func Install(agentsDir, spec string, force bool) (string, error) {
 			return "", fmt.Errorf("skill %q already exists in %s and is not in .skill-lock.json; delete it or re-run with --force", name, filepath.Dir(dest))
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.RemoveAll(dest); err != nil {
-		return "", err
-	}
-	if err := copyDir(skillRoot, dest); err != nil {
+	if err := replaceDir(skillRoot, dest); err != nil {
 		return "", err
 	}
 	hash, _ := FolderHash(dest)
@@ -438,6 +521,44 @@ func Install(agentsDir, spec string, force bool) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+// replaceDir copies src into a staging dir next to dest, then swaps it in.
+// A failed copy leaves an existing dest untouched. Staging names start with
+// a dot, which the skill loader ignores.
+func replaceDir(src, dest string) error {
+	parent := filepath.Dir(dest)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return err
+	}
+	staging, err := os.MkdirTemp(parent, ".install-"+filepath.Base(dest)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging) // no-op once renamed
+	if err := copyDir(src, staging); err != nil {
+		return err
+	}
+	if err := os.Chmod(staging, 0o755); err != nil {
+		return err
+	}
+	old := ""
+	if _, err := os.Lstat(dest); err == nil {
+		old = staging + ".old"
+		if err := os.Rename(dest, old); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(staging, dest); err != nil {
+		if old != "" {
+			_ = os.Rename(old, dest)
+		}
+		return err
+	}
+	if old != "" {
+		return os.RemoveAll(old)
+	}
+	return nil
 }
 
 // findSkill locates exactly one SKILL.md under root. repoRoot is used to
@@ -488,6 +609,9 @@ func FolderHash(dir string) (string, error) {
 			return walkErr
 		}
 		if info.IsDir() {
+			if info.Name() == ".git" && path != dir {
+				return filepath.SkipDir // copies never carry it; see copyDir
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(dir, path)
@@ -554,4 +678,65 @@ func hasSkillFile(dir string) bool {
 func dirExists(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && st.IsDir()
+}
+
+// danglingLink reports whether path is a symlink whose target is missing.
+func danglingLink(path string) (string, bool) {
+	st, err := os.Lstat(path)
+	if err != nil || st.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	if _, err := os.Stat(target); err == nil {
+		return "", false
+	}
+	return target, true
+}
+
+// RemoveLinks deletes the symlinks in writable harness skills dirs that
+// point at skillDir, so deleting a canonical skill leaves no dangling links.
+// Copies are left alone: Minerva cannot tell them from the harness's own
+// work. It returns the links it removed.
+func RemoveLinks(env harness.Env, skillDir string) ([]string, error) {
+	want, err := filepath.Abs(skillDir)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	for _, h := range harness.Catalog(env) {
+		if !h.SyncWritable || !h.LinkSkills {
+			continue
+		}
+		entries, err := os.ReadDir(h.SkillsDir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink == 0 {
+				continue
+			}
+			link := filepath.Join(h.SkillsDir, e.Name())
+			target, err := os.Readlink(link)
+			if err != nil {
+				continue
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(h.SkillsDir, target)
+			}
+			if filepath.Clean(target) != want {
+				continue
+			}
+			if err := os.Remove(link); err != nil {
+				return removed, err
+			}
+			removed = append(removed, link)
+		}
+	}
+	return removed, nil
 }

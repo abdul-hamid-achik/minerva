@@ -94,6 +94,9 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 // listStubs lists sessions from their files alone. It applies every filter
 // but Workspace.
 func listStubs(env harness.Env, filter Filter) ([]Session, error) {
+	if filter.Harness != "" && harness.Get(env, filter.Harness) == nil {
+		return nil, fmt.Errorf("unknown harness %q (known: %s)", filter.Harness, strings.Join(harness.IDs(env), ", "))
+	}
 	var out []Session
 	for _, h := range harness.Catalog(env) {
 		if filter.Harness != "" && h.ID != filter.Harness {
