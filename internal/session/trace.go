@@ -2,14 +2,17 @@
 package session
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/abdul-hamid-achik/minerva/internal/harness"
@@ -75,7 +78,22 @@ type Filter struct {
 }
 
 // List walks harness session globs and returns metadata (no turn bodies).
+// A workspace is only known after parsing, so with filter.Workspace set
+// sessions are parsed (newest first) until filter.Limit of them match.
 func List(env harness.Env, filter Filter) ([]Session, error) {
+	if filter.Workspace == "" {
+		return listStubs(env, filter)
+	}
+	full, err := LoadFiltered(env, filter)
+	for i := range full {
+		full[i].Turns = nil
+	}
+	return full, err
+}
+
+// listStubs lists sessions from their files alone. It applies every filter
+// but Workspace.
+func listStubs(env harness.Env, filter Filter) ([]Session, error) {
 	var out []Session
 	for _, h := range harness.Catalog(env) {
 		if filter.Harness != "" && h.ID != filter.Harness {
@@ -159,13 +177,24 @@ func dropHermesLogCopies(in []Session) []Session {
 }
 
 func keep(env harness.Env, f Filter, s Session) bool {
-	if f.SessionID != "" && s.ID != f.SessionID && !strings.HasPrefix(s.ID, f.SessionID) && !strings.Contains(s.Path, f.SessionID) {
+	if f.SessionID != "" && !matchesSessionID(s, f.SessionID) {
 		return false
 	}
 	if f.Since > 0 && env.Now.Sub(s.MTime) > f.Since {
 		return false
 	}
 	return true
+}
+
+// matchesSessionID reports whether q is a prefix of the session id or of an
+// id-like part of its file name. Codex names files rollout-<time>-<uuid>, so
+// a uuid prefix matches after a dash; directory names never match.
+func matchesSessionID(s Session, q string) bool {
+	if strings.HasPrefix(s.ID, q) {
+		return true
+	}
+	stem := strings.TrimSuffix(filepath.Base(s.Path), filepath.Ext(s.Path))
+	return strings.HasPrefix(stem, q) || strings.Contains(stem, "-"+q)
 }
 
 func sessionIDFromPath(harnessID, path string) string {
@@ -206,14 +235,30 @@ func Load(s Session) (Session, error) {
 	}
 }
 
-// LoadFiltered lists then fully parses matching sessions (workspace filter applied after parse).
+// LoadFiltered lists then fully parses matching sessions, newest first. The
+// workspace filter needs the parsed session, so with a workspace the limit
+// counts matching sessions rather than files.
 func LoadFiltered(env harness.Env, filter Filter) ([]Session, error) {
-	meta, err := List(env, filter)
+	stubFilter := filter
+	if filter.Workspace != "" {
+		stubFilter.Limit = 0
+	}
+	meta, err := listStubs(env, stubFilter)
 	if err != nil {
 		return nil, err
 	}
 	var out []Session
 	for _, m := range meta {
+		if filter.Limit > 0 && len(out) >= filter.Limit {
+			break
+		}
+		// Skip a session whose location already shows another workspace;
+		// parsing every transcript to find a few takes tens of seconds.
+		if filter.Workspace != "" {
+			if ws := stubWorkspace(m); ws != "" && !workspaceMatch(ws, filter.Workspace) {
+				continue
+			}
+		}
 		full, err := Load(m)
 		if err != nil {
 			continue
@@ -231,9 +276,100 @@ func workspaceMatch(got, want string) bool {
 	if got == "" || want == "" {
 		return false
 	}
+	if !strings.Contains(got, "/") {
+		// Cursor only records its project slug: the path with every
+		// separator turned into "-" (Users-me-projects-app).
+		g, w := pathSlug(got), pathSlug(want)
+		return w != "" && (g == w || strings.HasSuffix(g, "-"+w))
+	}
 	got = filepath.Clean(got)
 	want = filepath.Clean(want)
 	return got == want || strings.HasSuffix(got, want) || strings.Contains(got, want)
+}
+
+// stubWorkspace returns the workspace a session's file location already
+// tells, without parsing the session, or "" when only parsing can. Claude
+// and Cursor name the project dir after the workspace path; Codex and omp
+// open with an entry holding cwd; an OpenCode session file has directory.
+func stubWorkspace(s Session) string {
+	switch {
+	case s.Workspace != "":
+		return s.Workspace
+	case s.Harness == harness.Claude:
+		// Claude names the dir after the launch cwd, "/" → "-"; a dir
+		// that does not look like that tells nothing.
+		if dir := filepath.Base(filepath.Dir(s.Path)); strings.HasPrefix(dir, "-") {
+			return dir
+		}
+		return ""
+	case s.Harness == harness.Cursor:
+		return inferCursorWorkspace(s.Path)
+	case s.Harness == harness.Codex:
+		return peekJSONL(s.Path, "session_meta", func(obj map[string]any) any { return obj["payload"] })
+	case s.Harness == harness.OMP:
+		return peekJSONL(s.Path, "session", func(obj map[string]any) any { return obj })
+	case s.Harness == harness.OpenCode && strings.EqualFold(filepath.Ext(s.Path), ".json"):
+		return peekOpenCodeDir(s.Path)
+	}
+	return ""
+}
+
+// peekJSONL reads the first few lines of a transcript for the entry of the
+// given type and returns the "cwd" of the object holder picks from it.
+func peekJSONL(path, typ string, holder func(map[string]any) any) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 64*1024)
+	for i := 0; i < 5; i++ {
+		line, tooLong, err := readLine(r, maxJSONLLine)
+		var obj map[string]any
+		if !tooLong && json.Unmarshal(line, &obj) == nil && obj["type"] == typ {
+			m, _ := holder(obj).(map[string]any)
+			cwd, _ := m["cwd"].(string)
+			return cwd
+		}
+		if err != nil {
+			return ""
+		}
+	}
+	return ""
+}
+
+// peekOpenCodeDir reads the directory from an OpenCode session file, which
+// is small; the messages and parts live in other files.
+func peekOpenCodeDir(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var meta struct {
+		Directory string `json:"directory"`
+	}
+	if json.Unmarshal(data, &meta) != nil {
+		return ""
+	}
+	return meta.Directory
+}
+
+// pathSlug lowercases p and turns every run of non-alphanumerics into one
+// "-", so a path and the Cursor project slug of it compare equal.
+func pathSlug(p string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(p) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			dash = false
+		case !dash && b.Len() > 0:
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	return strings.TrimSuffix(b.String(), "-")
 }
 
 func summarize(s *Session) {
@@ -539,6 +675,9 @@ func leadingExecutable(seg string) string {
 	return ""
 }
 
+// maxSinceDays keeps a day count far from overflowing time.Duration.
+const maxSinceDays = 100 * 365
+
 // ParseSince accepts Go durations (24h, 90m) or day counts (7d).
 func ParseSince(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
@@ -546,11 +685,13 @@ func ParseSince(s string) (time.Duration, error) {
 		return 0, nil
 	}
 	if d, err := time.ParseDuration(s); err == nil {
+		if d < 0 {
+			return 0, fmt.Errorf("invalid since %q: must not be negative", s)
+		}
 		return d, nil
 	}
-	if strings.HasSuffix(s, "d") {
-		var days int
-		if _, err := fmt.Sscanf(strings.TrimSuffix(s, "d"), "%d", &days); err == nil && days >= 0 {
+	if n, ok := strings.CutSuffix(s, "d"); ok {
+		if days, err := strconv.Atoi(n); err == nil && days >= 0 && days <= maxSinceDays {
 			return time.Duration(days) * 24 * time.Hour, nil
 		}
 	}

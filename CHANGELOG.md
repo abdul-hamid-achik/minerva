@@ -59,6 +59,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `skill update` and `propose apply` keep every frontmatter key
   (`allowed-tools`, `license`, `metadata`, comments), not only `name` and
   `description`; SKILL.md files are written atomically
+- A transcript line over 8 MB (an inlined image, a huge tool result) is
+  skipped instead of silently dropping the whole session
+- `--workspace` is applied before `--limit`, so `analyze --workspace X
+  --limit 5` returns X's five newest sessions instead of filtering the five
+  newest overall; `sessions --workspace` (and MCP `minerva_sessions`) now
+  filter. Sessions whose location already shows another workspace are not
+  parsed, so a workspace scan stays fast
+- Cursor sessions match `--workspace /path` (their project slug is compared
+  to the path); the slug is the directory above `agent-transcripts`
+- `--session` matches a prefix of the id or of an id in the file name (a
+  Codex rollout uuid), no longer any directory name containing it
+- `--since` rejects negative durations and malformed day counts (`1.5d`,
+  `7xd`) instead of silently widening the window
+- Codex sessions report the model from `turn_context`, not the provider
 
 ## [1.1.0] - 2026-09-01
 

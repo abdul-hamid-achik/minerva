@@ -2,8 +2,10 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,26 +14,56 @@ import (
 	"unicode/utf8"
 )
 
+// maxJSONLLine bounds the memory one transcript line may take. Longer lines
+// are almost always an inlined image or a huge tool result.
+const maxJSONLLine = 8 << 20
+
 func parseJSONL(path string, handle func(map[string]any)) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 8<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
+	r := bufio.NewReaderSize(f, 64*1024)
+	for {
+		line, tooLong, err := readLine(r, maxJSONLLine)
+		// An oversized line is skipped, not fatal: one pasted screenshot
+		// must not drop every turn of the session around it.
+		if !tooLong {
+			if line = bytes.TrimSpace(line); len(line) > 0 {
+				var obj map[string]any
+				if json.Unmarshal(line, &obj) == nil {
+					handle(obj)
+				}
+			}
 		}
-		var obj map[string]any
-		if json.Unmarshal([]byte(line), &obj) != nil {
-			continue
+		if err == io.EOF {
+			return nil
 		}
-		handle(obj)
+		if err != nil {
+			return err
+		}
 	}
-	return sc.Err()
+}
+
+// readLine returns the next line without its newline. When the line is
+// longer than max it is consumed and discarded, and tooLong is set. err is
+// io.EOF after the last line.
+func readLine(r *bufio.Reader, max int) (line []byte, tooLong bool, err error) {
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if !tooLong {
+			if len(line)+len(chunk) > max {
+				tooLong, line = true, nil
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		return bytes.TrimSuffix(line, []byte("\n")), tooLong, err
+	}
 }
 
 func parseClaude(s Session) (Session, error) {
@@ -90,11 +122,15 @@ func parseCursor(s Session) (Session, error) {
 	return s, err
 }
 
+// inferCursorWorkspace returns the project slug Cursor stores transcripts
+// under: the directory right above agent-transcripts. (Looking for a
+// "projects" component instead picks the wrong one when the home itself
+// lives under a projects dir.)
 func inferCursorWorkspace(path string) string {
 	parts := strings.Split(filepath.ToSlash(path), "/")
-	for i, p := range parts {
-		if p == "projects" && i+1 < len(parts) {
-			return parts[i+1]
+	for i := len(parts) - 1; i > 0; i-- {
+		if parts[i] == "agent-transcripts" {
+			return parts[i-1]
 		}
 	}
 	return ""
@@ -119,9 +155,15 @@ func parseCodex(s Session) (Session, error) {
 				if id, ok := payload["session_id"].(string); ok && id != "" {
 					s.ID = id
 				}
-				if mp, ok := payload["model_provider"].(string); ok {
+				// model_provider ("openai") is only a fallback; turn_context
+				// names the model itself.
+				if mp, ok := payload["model_provider"].(string); ok && s.Model == "" {
 					s.Model = mp
 				}
+			}
+		case "turn_context":
+			if m, ok := payload["model"].(string); ok && m != "" {
+				s.Model = m
 			}
 		case "response_item":
 			if payload == nil {
