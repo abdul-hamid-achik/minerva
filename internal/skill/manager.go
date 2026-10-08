@@ -261,6 +261,12 @@ func validateSkillName(name string) error {
 		return errors.New("name is not valid UTF-8")
 	case len(name) > MaxSkillNameBytes:
 		return fmt.Errorf("name exceeds %d bytes", MaxSkillNameBytes)
+	case name == "." || name == "..":
+		return fmt.Errorf("name %q is not allowed", name)
+	case strings.HasPrefix(name, "."):
+		return errors.New("name starts with a dot")
+	case strings.ContainsAny(name, `/\`):
+		return errors.New("name contains a path separator")
 	}
 	for _, r := range name {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
@@ -268,6 +274,19 @@ func validateSkillName(name string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateName reports whether name is usable as a skill name. A valid name
+// is a single path element, so joining it to a directory can never address
+// anything outside that directory.
+func ValidateName(name string) error {
+	return validateSkillName(name)
+}
+
+// IsFlat reports whether s was loaded from a bare <name>.md file in the
+// library root rather than from <folder>/SKILL.md.
+func IsFlat(s *Skill) bool {
+	return !strings.EqualFold(filepath.Base(s.Path), "SKILL.md")
 }
 
 // All returns all discovered skills.
@@ -343,6 +362,12 @@ func (m *Manager) Create(dir, name, description, content string) error {
 	}
 
 	skillDir := filepath.Join(dir, name)
+	// Has only knows frontmatter names: a folder whose SKILL.md declares a
+	// different name, or one differing only in case on a case-insensitive
+	// filesystem, must not be overwritten either.
+	if _, err := os.Lstat(skillDir); err == nil {
+		return fmt.Errorf("skill directory %s already exists", skillDir)
+	}
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return fmt.Errorf("create skill directory: %w", err)
 	}
@@ -427,15 +452,25 @@ func WriteSkillFile(path, name, description, content string) error {
 	return writeSkillFile(path, name, description, content)
 }
 
-// Delete removes a skill directory.
+// Delete removes a skill from dir: its folder, or the file of a flat
+// <name>.md skill. The location comes from where the skill was loaded, not
+// from its name, so a frontmatter name that differs from the folder still
+// deletes the right thing, and nothing outside dir is ever removed.
 func (m *Manager) Delete(dir, name string) error {
-	if !m.Has(name) {
+	s := m.Get(name)
+	if s == nil {
 		return fmt.Errorf("skill %q not found", name)
 	}
-
-	skillDir := filepath.Join(dir, name)
-	if err := os.RemoveAll(skillDir); err != nil {
-		return fmt.Errorf("delete skill directory: %w", err)
+	root := filepath.Clean(dir)
+	target := filepath.Dir(s.Path)
+	if IsFlat(s) {
+		target = s.Path
+	}
+	if filepath.Dir(target) != root {
+		return fmt.Errorf("skill %q is not in %s", name, root)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("delete skill: %w", err)
 	}
 
 	return m.LoadAll()
