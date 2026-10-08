@@ -1,7 +1,7 @@
 # Minerva
 
 [![Release](https://img.shields.io/github/v/release/abdul-hamid-achik/minerva)](https://github.com/abdul-hamid-achik/minerva/releases)
-[![Changelog](https://img.shields.io/badge/changelog-unreleased-blue)](./CHANGELOG.md)
+[![Changelog](https://img.shields.io/badge/changelog-1.2.0-blue)](./CHANGELOG.md)
 
 **Skill intelligence** for agent harnesses. Minerva reads conversations and
 tool calls from Claude Code, Codex, Cursor, OpenCode, Copilot, Gemini,

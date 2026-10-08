@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-08
+
+Correctness pass from a full code review: tool results matched to their call
+by id (retry signals now fire on real Claude and Codex transcripts), Hermes
+sessions read from `state.db`, safe skill names, and a sync that protects the
+user's own links and folders.
+
 ### Added
 
 - Hermes Agent harness (`hermes`): skills synced by symlink into
@@ -202,6 +209,7 @@ Operator control plane release (superseded by the unreleased pivot).
 
 Initial public release.
 
+[1.2.0]: https://github.com/abdul-hamid-achik/minerva/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/abdul-hamid-achik/minerva/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/abdul-hamid-achik/minerva/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/abdul-hamid-achik/minerva/compare/v0.1.0...v0.2.0
