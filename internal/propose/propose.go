@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/abdul-hamid-achik/minerva/internal/session"
 	"github.com/abdul-hamid-achik/minerva/internal/signal"
@@ -516,12 +517,36 @@ func canonicalTools(key string) string {
 	return strings.Join(out, "-")
 }
 
+// closest returns the catalog skill a signal is about: every word of the
+// skill's name must appear as a whole word in the signal key. Only the key
+// counts; the message always says "repeated tool sequence" or "retry after
+// error", which would tie a skill named "tool" or "retry" to everything, and
+// substrings would tie "go" to "mongo". The most specific name wins.
 func closest(catalog []*skill.Skill, sig signal.Signal) string {
-	key := strings.ToLower(sig.Key + " " + sig.Message)
+	inKey := map[string]bool{}
+	for _, w := range words(sig.Key) {
+		inKey[w] = true
+	}
+	best, bestWords := "", 0
 	for _, s := range catalog {
-		if strings.Contains(key, strings.ToLower(s.Name)) {
-			return s.Name
+		nameWords := words(s.Name)
+		if len(nameWords) <= bestWords {
+			continue
+		}
+		all := len(nameWords) > 0
+		for _, w := range nameWords {
+			all = all && inKey[w]
+		}
+		if all {
+			best, bestWords = s.Name, len(nameWords)
 		}
 	}
-	return ""
+	return best
+}
+
+// words splits s into lowercase letter/digit runs.
+func words(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
 }

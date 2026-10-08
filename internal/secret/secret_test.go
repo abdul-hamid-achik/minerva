@@ -86,3 +86,35 @@ func TestRedact_Idempotent(t *testing.T) {
 		t.Fatalf("not idempotent:\n%s\n%s", once, Redact(once))
 	}
 }
+
+func TestRedact_JSONAndGluedSecrets(t *testing.T) {
+	cases := map[string]string{
+		`{"password":"correcthorsebatterystaple1"}`:                          "correcthorse",
+		`{"password": "hunter22x"}`:                                          "hunter22x",
+		`{"api_key": "abcdef0123456789abcdef"}`:                              "abcdef0123456789",
+		`{"Authorization": "Bearer abcdef0123456789abcdef"}`:                 "abcdef0123456789",
+		`{"aws_secret_access_key":"wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"}`: "wJalrXUtnFEMI",
+		"mcp__srv_ghp_abcdefghijklmnopqrstuvwxyz0123456789__tool":            "abcdefghijklmnop",
+		"hf_abcdefghijklmnopqrstuvwxyz0123456789":                            "abcdefghijklmnop",
+		"dop_v1_" + strings.Repeat("ab12", 16):                               strings.Repeat("ab12", 16),
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEabc\ndef":                  "MIIEabc",
+	}
+	for in, secretPart := range cases {
+		out := Redact(in)
+		if strings.Contains(out, secretPart) {
+			t.Errorf("Redact(%q) = %q, still contains %q", in, out, secretPart)
+		}
+		if len(Hits(in)) == 0 {
+			t.Errorf("Hits(%q) found nothing", in)
+		}
+	}
+	if got := Redact("mcp__srv_ghp_abcdefghijklmnopqrstuvwxyz0123456789__tool"); !strings.HasPrefix(got, "mcp__srv_ghp_[redacted]") {
+		t.Errorf("glued token lost its context: %q", got)
+	}
+	// Prose and ordinary keys stay intact.
+	for _, clean := range []string{"risk-assessment-framework-for-teams", `{"token_count": 12}`, "the password is set elsewhere"} {
+		if Redact(clean) != clean {
+			t.Errorf("over-redacted %q → %q", clean, Redact(clean))
+		}
+	}
+}

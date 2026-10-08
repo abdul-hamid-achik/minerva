@@ -417,6 +417,7 @@ func RedactSession(s *Session) {
 	for i := range s.Turns {
 		s.Turns[i].Text = secret.Redact(s.Turns[i].Text)
 		for j := range s.Turns[i].ToolCalls {
+			s.Turns[i].ToolCalls[j].Name = secret.Redact(s.Turns[i].ToolCalls[j].Name)
 			s.Turns[i].ToolCalls[j].Args = secret.Redact(s.Turns[i].ToolCalls[j].Args)
 			s.Turns[i].ToolCalls[j].Result = secret.Redact(s.Turns[i].ToolCalls[j].Result)
 		}
