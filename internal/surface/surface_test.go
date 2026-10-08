@@ -25,11 +25,12 @@ func TestProductTools_CompactContract(t *testing.T) {
 		if !strings.HasPrefix(tool.Description, "Use when") {
 			t.Fatalf("%s description should start with use-when guidance", tool.Name)
 		}
-		if tool.Name != "minerva_apply" && !tool.ReadOnly {
-			t.Fatalf("%s must be read-only", tool.Name)
+		writes := tool.Name == "minerva_apply" || tool.Name == "minerva_propose"
+		if tool.ReadOnly == writes {
+			t.Fatalf("%s: read_only=%v, but writes disk=%v", tool.Name, tool.ReadOnly, writes)
 		}
-		if tool.Name == "minerva_apply" && tool.ReadOnly {
-			t.Fatal("apply must not be read-only")
+		if tool.Destructive != (tool.Name == "minerva_apply") {
+			t.Fatalf("%s: only minerva_apply is destructive", tool.Name)
 		}
 	}
 	for _, required := range []string{

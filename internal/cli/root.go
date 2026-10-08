@@ -115,6 +115,34 @@ func skillManager() *skill.Manager {
 	return skill.ForAgents(agentsDir())
 }
 
+// loadSkills loads the library and reports the skills it skipped on stderr.
+func loadSkills() (*skill.Manager, error) {
+	mgr := skillManager()
+	if err := mgr.LoadAll(); err != nil {
+		return nil, err
+	}
+	warnSkipped(mgr)
+	return mgr, nil
+}
+
+// catalogForAnalysis loads the library for analyze and propose. There the
+// catalog only feeds load-gap and update proposals, so a library that cannot
+// be read is a warning, not a failure.
+func catalogForAnalysis() *skill.Manager {
+	mgr := skillManager()
+	if err := mgr.LoadAll(); err != nil {
+		fmt.Fprintf(os.Stderr, "minerva: warning: skills not loaded, so no load-gap or update proposals: %v\n", err)
+	}
+	warnSkipped(mgr)
+	return mgr
+}
+
+func warnSkipped(mgr *skill.Manager) {
+	for _, p := range mgr.Problems() {
+		fmt.Fprintf(os.Stderr, "minerva: warning: skipped skill: %v\n", p)
+	}
+}
+
 func printJSON(v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

@@ -44,7 +44,11 @@ type Proposal struct {
 	Action      string            `json:"action"`
 }
 
-// Store is the last propose run, persisted so apply can find drafts.
+// MaxStored bounds how many proposals the store keeps across runs.
+const MaxStored = 100
+
+// Store holds the proposals of recent propose runs, newest first, so apply
+// can find a draft by the id an earlier run printed.
 type Store struct {
 	GeneratedAt time.Time  `json:"generated_at"`
 	Proposals   []Proposal `json:"proposals"`
@@ -54,18 +58,38 @@ func storePath(agentsDir string) string {
 	return filepath.Join(agentsDir, ".minerva", "proposals.json")
 }
 
-// Save writes proposals to agentsDir/.minerva/proposals.json.
+// Save adds proposals to agentsDir/.minerva/proposals.json. A proposal
+// replaces the stored one with the same id; others are kept (up to
+// MaxStored), so a narrower or empty run never drops an id printed before.
+// The file is replaced atomically, so a concurrent apply never reads half of
+// it.
 func Save(agentsDir string, proposals []Proposal) error {
 	dir := filepath.Join(agentsDir, ".minerva")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	st := Store{GeneratedAt: time.Now().UTC(), Proposals: proposals}
+	merged := append([]Proposal(nil), proposals...)
+	seen := map[string]bool{}
+	for _, p := range proposals {
+		seen[p.ID] = true
+	}
+	if prev, err := LoadStore(agentsDir); err == nil {
+		for _, p := range prev.Proposals {
+			if !seen[p.ID] {
+				seen[p.ID] = true
+				merged = append(merged, p)
+			}
+		}
+	}
+	if len(merged) > MaxStored {
+		merged = merged[:MaxStored]
+	}
+	st := Store{GeneratedAt: time.Now().UTC(), Proposals: merged}
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(storePath(agentsDir), data, 0o644)
+	return skill.WriteFileAtomic(storePath(agentsDir), data)
 }
 
 // LoadStore reads the last propose run.

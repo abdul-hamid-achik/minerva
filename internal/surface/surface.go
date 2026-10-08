@@ -10,6 +10,10 @@ type ProductTool struct {
 	Description string `json:"description"`
 	UseWhen     string `json:"use_when"`
 	ReadOnly    bool   `json:"read_only"`
+	// Destructive marks a tool that can overwrite or remove existing data.
+	// A tool can write without being destructive (minerva_propose only adds
+	// to its proposal store).
+	Destructive bool `json:"destructive"`
 }
 
 // ProductToolCount is the compact contract size.
@@ -42,9 +46,9 @@ func ProductTools() []ProductTool {
 		{
 			Name:        "minerva_propose",
 			Title:       "Propose skills from sessions",
-			Description: "Use when you want ranked skill proposals (new, update, load-gap) backed by session evidence. Saves drafts so minerva_apply can write them. Does not create SKILL.md until apply.",
+			Description: "Use when you want ranked skill proposals (new, update, load-gap) backed by session evidence. Saves drafts to ~/.agents/.minerva/proposals.json so minerva_apply can write them. Does not create SKILL.md until apply.",
 			UseWhen:     "Which skills should I create or load from recent sessions?",
-			ReadOnly:    true,
+			ReadOnly:    false,
 		},
 		{
 			Name:        "minerva_resolve_skill",
@@ -73,6 +77,7 @@ func ProductTools() []ProductTool {
 			Description: "Use when writing a previously proposed new_skill or update_skill to ~/.agents/skills. Requires proposal_id from minerva_propose. This mutates disk.",
 			UseWhen:     "Create or update a SKILL.md from a proposal id.",
 			ReadOnly:    false,
+			Destructive: true,
 		},
 	}
 }

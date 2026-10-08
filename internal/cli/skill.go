@@ -37,8 +37,8 @@ func newSkillListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all skills",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			mgr := skillManager()
-			if err := mgr.LoadAll(); err != nil {
+			mgr, err := loadSkills()
+			if err != nil {
 				return err
 			}
 			if jsonOut {
@@ -64,8 +64,8 @@ func newSkillShowCmd() *cobra.Command {
 		Short: "Show a skill's full content",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := skillManager()
-			if err := mgr.LoadAll(); err != nil {
+			mgr, err := loadSkills()
+			if err != nil {
 				return err
 			}
 			content, ok := mgr.Load(args[0])
@@ -85,8 +85,8 @@ func newSkillCompareCmd() *cobra.Command {
 		Short: "Compare two skills (unified diff by default)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := skillManager()
-			if err := mgr.LoadAll(); err != nil {
+			mgr, err := loadSkills()
+			if err != nil {
 				return err
 			}
 			contentA, okA := mgr.Load(args[0])
@@ -121,8 +121,8 @@ func newSkillCreateCmd() *cobra.Command {
 		Short: "Create a new skill",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := skillManager()
-			if err := mgr.LoadAll(); err != nil {
+			mgr, err := loadSkills()
+			if err != nil {
 				return err
 			}
 			content, err := resolveContentArg(args, 1, fromFile)
@@ -152,8 +152,8 @@ func newSkillUpdateCmd() *cobra.Command {
 		Short: "Update an existing skill's description and/or body",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := skillManager()
-			if err := mgr.LoadAll(); err != nil {
+			mgr, err := loadSkills()
+			if err != nil {
 				return err
 			}
 			var descPtr *string
@@ -198,8 +198,8 @@ func newSkillDeleteCmd() *cobra.Command {
 		Short: "Delete a skill",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := skillManager()
-			if err := mgr.LoadAll(); err != nil {
+			mgr, err := loadSkills()
+			if err != nil {
 				return err
 			}
 			if err := mgr.Delete(filepath.Join(agentsDir(), "skills"), args[0]); err != nil {
@@ -218,8 +218,8 @@ func newSkillResolveCmd() *cobra.Command {
 		Short: "Rank skills for a natural-language intent",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := skillManager()
-			if err := mgr.LoadAll(); err != nil {
+			mgr, err := loadSkills()
+			if err != nil {
 				return err
 			}
 			res := skill.Resolve(strings.Join(args, " "), mgr.All())
@@ -294,6 +294,9 @@ func newSkillSyncCmd() *cobra.Command {
 		Use:   "sync",
 		Short: "Link or copy canonical skills into harness skill dirs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := loadSkills(); err != nil {
+				return err
+			}
 			targets := splitCSV(to)
 			acts, err := sync.Sync(sync.SyncOptions{Env: env(), To: targets, DryRun: dryRun, Force: force})
 			if err != nil {
