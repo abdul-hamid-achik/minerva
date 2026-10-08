@@ -97,6 +97,18 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 					}
 					continue
 				}
+				if h.ID == harness.Hermes && filepath.Base(p) == hermesDBName {
+					stubs, err := listHermesDB(p)
+					if err != nil {
+						continue
+					}
+					for _, sess := range stubs {
+						if keep(env, filter, sess) {
+							out = append(out, sess)
+						}
+					}
+					continue
+				}
 				if !strings.HasSuffix(strings.ToLower(p), ".jsonl") && !strings.HasSuffix(strings.ToLower(p), ".json") {
 					if filepath.Base(p) == "sonar.db" {
 						sess := Session{Harness: h.ID, ID: "sonar.db", Path: p, MTime: st.ModTime()}
@@ -114,6 +126,7 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 			}
 		}
 	}
+	out = dropHermesLogCopies(out)
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].MTime.After(out[j].MTime)
 	})
@@ -121,6 +134,28 @@ func List(env harness.Env, filter Filter) ([]Session, error) {
 		out = out[:filter.Limit]
 	}
 	return out, nil
+}
+
+// dropHermesLogCopies removes Hermes gateway JSONL sessions that state.db
+// also holds, so a session is not analyzed twice.
+func dropHermesLogCopies(in []Session) []Session {
+	inDB := map[string]bool{}
+	for _, s := range in {
+		if s.Harness == harness.Hermes && filepath.Base(s.Path) == hermesDBName {
+			inDB[s.ID] = true
+		}
+	}
+	if len(inDB) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, s := range in {
+		if s.Harness == harness.Hermes && filepath.Base(s.Path) != hermesDBName && inDB[s.ID] {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func keep(env harness.Env, f Filter, s Session) bool {

@@ -11,7 +11,7 @@ Minerva discovers sessions by globbing well-known paths under `$MINERVA_HOME`
 | `opencode` | `~/.config/opencode/skills` | `~/.local/share/opencode/storage/session/*/*.json` | copy/link |
 | `copilot` | `~/.copilot/skills` | `~/.copilot/session-state/*` | copy/link |
 | `gemini` | `~/.gemini/skills` | `~/.gemini/tmp/*/chats/*.jsonl`, `~/.gemini/antigravity/conversations/*` | copy/link |
-| `hermes` | `~/.hermes/skills` | `~/.hermes/sessions/*.jsonl` | symlink |
+| `hermes` | `~/.hermes/skills` | `~/.hermes/state.db`, `~/.hermes/sessions/*.jsonl` | symlink |
 | `omp` | `~/.agents/skills` (native) | `~/.omp/agent/sessions/*/*.jsonl` | skip |
 | `sonar` | `~/.agents/skills` (native) | `~/.sonar/logs`, `sonar.db` | skip |
 
@@ -40,12 +40,14 @@ pass `--force`.
   `id`, and `$set`/`$push` snapshots of `messages`. Latest revision wins.
   Legacy `.json` exports are read too. Workspace is reverse-mapped through
   `~/.gemini/projects.json`.
-- **Hermes Agent** — `~/.hermes/sessions/<id>.jsonl` gateway transcripts:
-  OpenAI-style `user` / `assistant` (`tool_calls[].function`) / `tool`
-  messages, with an optional leading `session_meta`. Results are matched to
-  calls by `tool_call_id`; a non-zero `exit_code` or an `error` marks a failed
-  call. Transcripts carry no working directory. Legacy `session_*.json`
-  snapshots are not read.
+- **Hermes Agent** — current Hermes keeps every session in the SQLite store
+  `~/.hermes/state.db` (`sessions` and `messages` tables), read read-only;
+  its `cwd` becomes the workspace. Older `~/.hermes/sessions/<id>.jsonl`
+  gateway transcripts are read too, unless `state.db` already holds that
+  session. Both use OpenAI-style `user` / `assistant`
+  (`tool_calls[].function`) / `tool` messages. Results are matched to calls by
+  `tool_call_id`; a non-zero `exit_code` or an `error` marks a failed call.
+  Legacy `session_*.json` snapshots are not read.
 - **oh-my-pi (omp)** — `~/.omp/agent/sessions/<workspace>/*.jsonl`: a
   `session` entry (`id`, `cwd`) followed by `message` entries whose assistant
   content holds `toolCall` parts and whose `toolResult` messages carry

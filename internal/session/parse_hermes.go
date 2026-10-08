@@ -7,17 +7,22 @@ import (
 	"time"
 )
 
-// parseHermes reads a Hermes Agent gateway transcript
-// (~/.hermes/sessions/<id>.jsonl): OpenAI-style chat messages, one per line,
-// plus an optional {"role":"session_meta",…} line:
+// parseHermes reads a Hermes Agent session. Current Hermes keeps every
+// session in ~/.hermes/state.db (see parseHermesDB); older gateway logs are
+// JSONL (~/.hermes/sessions/<id>.jsonl), OpenAI-style chat messages one per
+// line plus an optional {"role":"session_meta",…} line. Both use the same
+// message shape:
 //
 //	{"role":"user","content":"…"}
 //	{"role":"assistant","content":"…","tool_calls":[{"id":…,"function":{"name":…,"arguments":"{…}"}}]}
 //	{"role":"tool","tool_call_id":…,"content":"…"}
 //
-// Tool results are attached to the call with the same id. The transcript
-// carries no working directory, so Workspace stays empty.
+// Tool results are attached to the call with the same id. A JSONL log carries
+// no working directory; state.db has one per session.
 func parseHermes(s Session) (Session, error) {
+	if filepath.Base(s.Path) == hermesDBName {
+		return parseHermesDB(s)
+	}
 	calls := callIndex{}
 	err := parseJSONL(s.Path, func(obj map[string]any) { hermesMessage(&s, calls, obj) })
 	if s.ID == "" {
@@ -37,7 +42,8 @@ func hermesMessage(s *Session, calls callIndex, obj map[string]any) {
 			s.Model = m
 		}
 	case "user":
-		if text, _ := obj["content"].(string); text != "" {
+		// content is a string, or a list of parts when the message had images
+		if text := toolResultText(obj["content"]); text != "" {
 			s.Turns = append(s.Turns, Turn{Role: "user", Text: text})
 		}
 	case "assistant":

@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Hermes Agent harness (`hermes`): skills synced by symlink into
-  `~/.hermes/skills`, sessions read from `~/.hermes/sessions/*.jsonl`
+  `~/.hermes/skills`, sessions read from `~/.hermes/state.db` (SQLite, read-only)
+  and older `~/.hermes/sessions/*.jsonl` logs
 - oh-my-pi harness (`omp`): modelled as a native reader of
   `~/.agents/skills` (never synced into); sessions read from
   `~/.omp/agent/sessions/*/*.jsonl`
