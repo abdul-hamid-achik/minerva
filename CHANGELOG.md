@@ -24,6 +24,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `harness doctor` and `skill sync` ignore harness-owned entries in a skills
   dir: dot-entries, `_shared`, and real directories without a `SKILL.md`
   (category folders). They no longer show up as `extra`
+- `retry_loop` needs the same command (for shell tools), not just the same
+  tool, and one session can add at most `PerSessionCap` to it
+
+### Fixed
+
+- Skill names must be a single path element (no `.`, `..`, separators or
+  leading dot). `skill create`/`delete`, `skill sync` and `skill install` can
+  no longer write, link or delete outside the library or harness dir
+- `skill create` no longer overwrites a folder whose `SKILL.md` declares a
+  different name; `skill delete` removes the folder the skill was loaded from
+- `skill sync` skips flat `<name>.md` skills instead of linking the whole
+  library; copies refuse symlinks; `skill install` rejects `.`/`..` in the spec
+- Tool results are matched to their call by id: Claude/Cursor `tool_use_id`,
+  Codex `call_id`, Copilot `toolCallId`. Failed calls are now detected for
+  Claude (`is_error`) and Codex (`Script failed`, exit codes), so
+  `retry_loop` fires on real transcripts, not only on fixtures
+- Copilot and omp no longer count one tool call twice
+- Skill loads are detected from reads of `skill://<name>` (omp) and
+  `…/skills/<name>/SKILL.md`; plugin skills (`plugin:skill`) record the skill,
+  not the plugin; Hermes `skill_manage` no longer counts as a load
+- Long tool arguments stay valid JSON, so long shell commands keep their
+  command
 
 ## [1.1.0] - 2026-09-01
 

@@ -221,10 +221,17 @@ func summarize(s *Session) {
 			if tc.Category == CatSkill && tc.Args != "" {
 				var obj map[string]any
 				if json.Unmarshal([]byte(tc.Args), &obj) == nil {
-					if n, ok := obj["skill"].(string); ok && n != "" && !seen[n] {
+					if n, ok := obj["skill"].(string); ok && n != "" && !seen[bareSkillName(n)] {
+						n = bareSkillName(n)
 						seen[n] = true
 						s.Skills = append(s.Skills, n)
 					}
+				}
+			}
+			if tc.Category == CatRead {
+				if n := skillFromRead(tc.Args); n != "" && !seen[n] {
+					seen[n] = true
+					s.Skills = append(s.Skills, n)
 				}
 			}
 		}
@@ -304,15 +311,35 @@ func compactJSON(v any) string {
 	case string:
 		return t
 	default:
-		b, err := json.Marshal(t)
+		// Cap long string values rather than the encoded text, so the
+		// result stays valid JSON and a long command keeps its executable.
+		b, err := json.Marshal(capStrings(t, 2000))
 		if err != nil {
 			return ""
 		}
-		s := string(b)
-		if len(s) > 2000 {
-			return s[:2000]
+		return string(b)
+	}
+}
+
+// capStrings returns v with every string value cut to at most n bytes.
+func capStrings(v any, n int) any {
+	switch t := v.(type) {
+	case string:
+		return truncate(t, n)
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			out[k] = capStrings(x, n)
 		}
-		return s
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = capStrings(x, n)
+		}
+		return out
+	default:
+		return v
 	}
 }
 

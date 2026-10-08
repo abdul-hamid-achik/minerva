@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func parseJSONL(path string, handle func(map[string]any)) error {
@@ -34,6 +35,7 @@ func parseJSONL(path string, handle func(map[string]any)) error {
 }
 
 func parseClaude(s Session) (Session, error) {
+	calls := callIndex{}
 	err := parseJSONL(s.Path, func(obj map[string]any) {
 		if cwd, ok := obj["cwd"].(string); ok && s.Workspace == "" {
 			s.Workspace = cwd
@@ -56,7 +58,7 @@ func parseClaude(s Session) (Session, error) {
 			role = typ
 		}
 		turn := Turn{Role: role}
-		appendContent(&turn, msg["content"])
+		appendContent(&s, calls, &turn, msg["content"])
 		if turn.Text != "" || len(turn.ToolCalls) > 0 {
 			s.Turns = append(s.Turns, turn)
 		}
@@ -65,6 +67,7 @@ func parseClaude(s Session) (Session, error) {
 }
 
 func parseCursor(s Session) (Session, error) {
+	calls := callIndex{}
 	err := parseJSONL(s.Path, func(obj map[string]any) {
 		role, _ := obj["role"].(string)
 		msg, _ := obj["message"].(map[string]any)
@@ -75,7 +78,7 @@ func parseCursor(s Session) (Session, error) {
 			role, _ = msg["role"].(string)
 		}
 		turn := Turn{Role: role}
-		appendContent(&turn, msg["content"])
+		appendContent(&s, calls, &turn, msg["content"])
 		if turn.Text != "" || len(turn.ToolCalls) > 0 {
 			s.Turns = append(s.Turns, turn)
 		}
@@ -98,6 +101,7 @@ func inferCursorWorkspace(path string) string {
 }
 
 func parseCodex(s Session) (Session, error) {
+	calls := callIndex{}
 	err := parseJSONL(s.Path, func(obj map[string]any) {
 		typ, _ := obj["type"].(string)
 		payload, _ := obj["payload"].(map[string]any)
@@ -137,22 +141,23 @@ func parseCodex(s Session) (Session, error) {
 				if strings.EqualFold(name, "skill") || categorize(name) == CatSkill {
 					turn.SkillsInvoked = skillNamesFromArgs(args)
 				}
+				id, _ := payload["call_id"].(string)
+				calls.add(id, len(s.Turns), 0)
 				s.Turns = append(s.Turns, turn)
 			case "function_call_output", "custom_tool_call_output":
-				if len(s.Turns) == 0 {
+				// Parallel calls interleave, so match the output by call_id.
+				id, _ := payload["call_id"].(string)
+				tc := calls.lookup(&s, id)
+				if tc == nil {
+					tc = lastCall(&s)
+				}
+				if tc == nil {
 					return
 				}
-				last := &s.Turns[len(s.Turns)-1]
-				if len(last.ToolCalls) == 0 {
-					return
-				}
-				out := compactJSON(payload["output"])
-				if out == "" {
-					out = compactJSON(payload)
-				}
-				last.ToolCalls[len(last.ToolCalls)-1].Result = truncate(out, 500)
-				if errStr, ok := payload["error"].(string); ok && errStr != "" {
-					last.ToolCalls[len(last.ToolCalls)-1].IsError = true
+				out := codexOutputText(payload["output"])
+				tc.Result = truncate(out, 500)
+				if errStr, ok := payload["error"].(string); (ok && errStr != "") || outputFailed(out) {
+					tc.IsError = true
 				}
 			case "message":
 				role, _ := payload["role"].(string)
@@ -190,6 +195,16 @@ func parseCodex(s Session) (Session, error) {
 		}
 	})
 	return s, err
+}
+
+// codexOutputText reads a tool output: a plain string (which may itself be a
+// JSON envelope with metadata.exit_code), or a list of {type,text} parts as
+// custom tools such as exec return ("Script completed …" / "Script failed …").
+func codexOutputText(v any) string {
+	if parts, ok := v.([]any); ok {
+		return toolResultText(parts)
+	}
+	return compactJSON(v)
 }
 
 func extractCodexText(payload map[string]any) string {
@@ -386,12 +401,9 @@ func parseCopilot(s Session) (Session, error) {
 		}
 		return s, nil
 	}
-	type pending struct {
-		id   string
-		turn int
-		idx  int
-	}
-	var lastByID = map[string]pending{}
+	// assistant.message lists toolRequests and tool.execution_start then
+	// announces the same toolCallId; both map to one call.
+	calls := callIndex{}
 	err = parseJSONL(eventsPath, func(obj map[string]any) {
 		typ, _ := obj["type"].(string)
 		data, _ := obj["data"].(map[string]any)
@@ -432,6 +444,8 @@ func parseCopilot(s Session) (Session, error) {
 						name, _ = m["toolName"].(string)
 					}
 					if name != "" {
+						id, _ := m["toolCallId"].(string)
+						calls.add(id, len(s.Turns), len(turn.ToolCalls))
 						turn.ToolCalls = append(turn.ToolCalls, ToolCall{
 							Name: name, Args: compactJSON(m["arguments"]), Category: categorize(name),
 						})
@@ -442,6 +456,13 @@ func parseCopilot(s Session) (Session, error) {
 				s.Turns = append(s.Turns, turn)
 			}
 		case "tool.execution_start":
+			id, _ := data["toolCallId"].(string)
+			if tc := calls.lookup(&s, id); tc != nil {
+				if tc.Args == "" {
+					tc.Args = compactJSON(data["arguments"])
+				}
+				return
+			}
 			name, _ := data["toolName"].(string)
 			if name == "" {
 				name, _ = data["name"].(string)
@@ -450,15 +471,11 @@ func parseCopilot(s Session) (Session, error) {
 				return
 			}
 			tc := ToolCall{Name: name, Args: compactJSON(data["arguments"]), Category: categorize(name)}
-			turn := Turn{Role: "assistant", ToolCalls: []ToolCall{tc}}
-			s.Turns = append(s.Turns, turn)
-			if id, ok := data["toolCallId"].(string); ok && id != "" {
-				lastByID[id] = pending{id: id, turn: len(s.Turns) - 1, idx: 0}
-			}
+			calls.add(id, len(s.Turns), 0)
+			s.Turns = append(s.Turns, Turn{Role: "assistant", ToolCalls: []ToolCall{tc}})
 		case "tool.execution_complete":
 			id, _ := data["toolCallId"].(string)
-			if p, ok := lastByID[id]; ok && p.turn < len(s.Turns) && p.idx < len(s.Turns[p.turn].ToolCalls) {
-				tc := &s.Turns[p.turn].ToolCalls[p.idx]
+			if tc := calls.lookup(&s, id); tc != nil {
 				if success, ok := data["success"].(bool); ok && !success {
 					tc.IsError = true
 				}
@@ -700,7 +717,11 @@ func firstLineValue(text string, keys ...string) string {
 	return ""
 }
 
-func appendContent(turn *Turn, content any) {
+// appendContent adds a Claude/Cursor content value to turn. A tool_result
+// usually arrives in the next (user) message, so it is matched to its
+// tool_use by id through calls; a result with no known id falls back to the
+// last call of the same turn, as older transcripts inline them.
+func appendContent(s *Session, calls callIndex, turn *Turn, content any) {
 	switch c := content.(type) {
 	case string:
 		turn.Text += c
@@ -723,43 +744,73 @@ func appendContent(turn *Turn, content any) {
 				name, _ := m["name"].(string)
 				args := compactJSON(m["input"])
 				tc := ToolCall{Name: name, Args: args, Category: categorize(name)}
+				id, _ := m["id"].(string)
+				calls.add(id, len(s.Turns), len(turn.ToolCalls))
 				turn.ToolCalls = append(turn.ToolCalls, tc)
 				if tc.Category == CatSkill || strings.EqualFold(name, "Skill") {
 					turn.SkillsInvoked = append(turn.SkillsInvoked, skillNamesFromArgs(args)...)
 				}
 			case "tool_result":
-				isErr, _ := m["is_error"].(bool)
-				if isErr && len(turn.ToolCalls) > 0 {
-					turn.ToolCalls[len(turn.ToolCalls)-1].IsError = true
+				id, _ := m["tool_use_id"].(string)
+				tc := calls.lookup(s, id)
+				if tc == nil && len(turn.ToolCalls) > 0 {
+					tc = &turn.ToolCalls[len(turn.ToolCalls)-1]
 				}
+				if tc == nil {
+					continue
+				}
+				if isErr, _ := m["is_error"].(bool); isErr {
+					tc.IsError = true
+				}
+				tc.Result = truncate(toolResultText(m["content"]), 500)
 			}
 		}
 	}
+}
+
+// toolResultText flattens a tool_result content value (a string or a list of
+// text parts).
+func toolResultText(content any) string {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []any:
+		var parts []string
+		for _, p := range c {
+			pm, _ := p.(map[string]any)
+			if t, _ := pm["text"].(string); t != "" {
+				parts = append(parts, t)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }
 
 func skillNamesFromArgs(args string) []string {
 	var obj map[string]any
 	if json.Unmarshal([]byte(args), &obj) != nil {
 		if args != "" && !strings.HasPrefix(args, "{") {
-			return []string{args}
+			return []string{bareSkillName(args)}
 		}
 		return nil
 	}
 	for _, key := range []string{"skill", "name", "skill_name"} {
 		if n, ok := obj[key].(string); ok && n != "" {
-			// claude uses "frontend-design:frontend-design"
-			if i := strings.IndexByte(n, ':'); i > 0 {
-				n = n[:i]
-			}
-			return []string{n}
+			// claude namespaces plugin skills: "vercel:nextjs" loads "nextjs"
+			return []string{bareSkillName(n)}
 		}
 	}
 	return nil
 }
 
+// truncate cuts s to at most n bytes without splitting a UTF-8 sequence.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }

@@ -51,7 +51,7 @@ const (
 	// RepeatMinSessions or RepeatMinOccurrences makes a 3-gram a pattern.
 	RepeatMinSessions    = 2
 	RepeatMinOccurrences = 3
-	// PerSessionCap bounds how much one session can push a repeat/shell signal.
+	// PerSessionCap bounds how much one session can push a repeat/shell/retry signal.
 	// Breadth (many sessions) should outrank depth (one very long session).
 	PerSessionCap = 5
 	// LoadGapMaxHits is how many resolve hits per prompt may become load gaps.
@@ -137,12 +137,13 @@ func Extract(sessions []session.Session, catalog []*skill.Skill) []Signal {
 			}
 		}
 
-		// retry loops: same tool right after it errored
+		// retry loops: the same tool (and, for shell, the same command) right
+		// after it errored
 		var prev *session.ToolCall
 		for _, t := range s.Turns {
 			for i := range t.ToolCalls {
 				tc := t.ToolCalls[i]
-				if prev != nil && prev.IsError && prev.Name == tc.Name {
+				if prev != nil && prev.IsError && tokenOf(*prev).label == tokenOf(tc).label {
 					add(KindRetry, tc.Name, "retry after error: "+tc.Name, 3, ev)
 				}
 				prev = &t.ToolCalls[i]
@@ -230,7 +231,7 @@ func Extract(sessions []session.Session, catalog []*skill.Skill) []Signal {
 	}
 	for i := range out {
 		sig := &out[i]
-		if sig.Kind == KindRepeat || sig.Kind == KindShellFam {
+		if sig.Kind == KindRepeat || sig.Kind == KindShellFam || sig.Kind == KindRetry {
 			// Re-derive weight from capped per-session counts so one marathon
 			// session cannot outrank a pattern seen across many sessions.
 			w := 0
