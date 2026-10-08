@@ -45,6 +45,9 @@ func Lint(agentsDir string) (*LintReport, error) {
 
 	skills := skillMgr.All()
 	rep.Skills = len(skills)
+	for _, p := range skillMgr.Problems() {
+		rep.add(SeverityError, "skill-load", agentsDir, "skipped: "+p.Error())
+	}
 
 	for _, s := range skills {
 		if strings.TrimSpace(s.Description) == "" {

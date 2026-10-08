@@ -200,3 +200,26 @@ func TestServer_ApplyRequiresProposal(t *testing.T) {
 		}
 	}
 }
+
+func TestNewServer_StartsWithABrokenSkill(t *testing.T) {
+	agents := filepath.Join(t.TempDir(), ".agents")
+	for name, body := range map[string]string{
+		"good":   "---\nname: good\n---\nbody\n",
+		"broken": "---\nname: [unclosed\n---\nbody\n",
+	} {
+		dir := filepath.Join(agents, "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv, err := NewServer(agents)
+	if err != nil {
+		t.Fatalf("server did not start: %v", err)
+	}
+	if !srv.skillManager.Has("good") {
+		t.Fatal("valid skill missing from the catalog")
+	}
+}

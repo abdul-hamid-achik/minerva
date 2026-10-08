@@ -31,8 +31,7 @@ func newProposeCmd() *cobra.Command {
 		for i := range sessions {
 			session.RedactSession(&sessions[i])
 		}
-		mgr := skillManager()
-		_ = mgr.LoadAll()
+		mgr := catalogForAnalysis()
 		sigs := signal.Extract(sessions, mgr.All())
 		proposals := propose.FromSignals(sigs, mgr.All())
 		if err := propose.Save(agentsDir(), proposals); err != nil {

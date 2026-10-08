@@ -48,8 +48,14 @@ func NewServer(agentsDir string) (*Server, error) {
 		agentsDir = filepath.Join(home, ".agents")
 	}
 	skillMgr := skill.ForAgents(agentsDir)
+	// Sessions, analyze and propose work without the catalog, so a library
+	// that cannot be read must not keep the whole server from starting.
+	// stderr is safe here: the protocol runs on stdout.
 	if err := skillMgr.LoadAll(); err != nil {
-		return nil, fmt.Errorf("load skills: %w", err)
+		fmt.Fprintf(os.Stderr, "minerva: warning: skills not loaded: %v\n", err)
+	}
+	for _, p := range skillMgr.Problems() {
+		fmt.Fprintf(os.Stderr, "minerva: warning: skipped skill: %v\n", p)
 	}
 	s := &Server{skillManager: skillMgr, agentsDir: agentsDir}
 	s.srv = sdkmcp.NewServer(

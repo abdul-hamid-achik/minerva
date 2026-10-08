@@ -35,8 +35,7 @@ func newAnalyzeCmd() *cobra.Command {
 			for i := range sessions {
 				session.RedactSession(&sessions[i])
 			}
-			mgr := skillManager()
-			_ = mgr.LoadAll()
+			mgr := catalogForAnalysis()
 			sigs := signal.Extract(sessions, mgr.All())
 			payload := map[string]any{"sessions": len(sessions), "signals": sigs}
 			if jsonOut {

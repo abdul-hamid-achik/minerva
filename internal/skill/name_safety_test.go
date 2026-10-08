@@ -50,11 +50,15 @@ func TestCreate_DoesNotOverwriteMismatchedFolder(t *testing.T) {
 	}
 }
 
-func TestLoadAll_RejectsDotName(t *testing.T) {
+func TestLoadAll_SkipsDotName(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "skills", "evil", "SKILL.md"), "---\nname: .\n---\nbody\n")
-	if err := ForAgents(dir).LoadAll(); err == nil {
-		t.Fatal("LoadAll accepted a skill named \".\"")
+	mgr := ForAgents(dir)
+	if err := mgr.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.Has(".") || len(mgr.Problems()) != 1 {
+		t.Fatalf("skills=%v problems=%v", mgr.All(), mgr.Problems())
 	}
 }
 
@@ -94,5 +98,27 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLoadAll_OneBadSkillDoesNotHideTheRest(t *testing.T) {
+	dir := t.TempDir()
+	skills := filepath.Join(dir, "skills")
+	writeFile(t, filepath.Join(skills, "good", "SKILL.md"), "---\nname: good\n---\nbody\n")
+	writeFile(t, filepath.Join(skills, "broken", "SKILL.md"), "---\nname: [unclosed\n---\nbody\n")
+	writeFile(t, filepath.Join(skills, "a-dup", "SKILL.md"), "---\nname: twin\n---\nfirst\n")
+	writeFile(t, filepath.Join(skills, "b-dup", "SKILL.md"), "---\nname: twin\n---\nsecond\n")
+	mgr := ForAgents(dir)
+	if err := mgr.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	if !mgr.Has("good") || !mgr.Has("twin") || len(mgr.All()) != 2 {
+		t.Fatalf("skills = %v", mgr.All())
+	}
+	if body, _ := mgr.Load("twin"); body != "first\n" && body != "first" {
+		t.Fatalf("duplicate resolved to %q, want the first folder", body)
+	}
+	if len(mgr.Problems()) != 2 {
+		t.Fatalf("problems = %v, want broken YAML and duplicate", mgr.Problems())
 	}
 }

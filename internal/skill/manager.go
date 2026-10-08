@@ -40,9 +40,10 @@ type CatalogEntry struct {
 
 // Manager handles skill discovery, loading, and CRUD.
 type Manager struct {
-	mu     sync.RWMutex
-	skills []*Skill
-	dirs   []string
+	mu       sync.RWMutex
+	skills   []*Skill
+	problems []error
+	dirs     []string
 }
 
 // NewManager creates a skill manager for explicit search directories.
@@ -68,21 +69,28 @@ func (m *Manager) AddSearchPath(dir string) {
 }
 
 // LoadAll discovers and loads all skill files from the search directories.
+// A skill that cannot be read or parsed, has an invalid name, or repeats a
+// name already loaded is skipped and recorded in Problems, so one bad
+// SKILL.md never hides the rest of the library. Only a search dir that
+// cannot be used is an error.
 func (m *Manager) LoadAll() error {
 	m.mu.RLock()
 	dirs := append([]string(nil), m.dirs...)
 	m.mu.RUnlock()
 
 	discovered := make([]*Skill, 0)
+	var problems []error
 	byName := make(map[string]string)
 	for _, dir := range dirs {
-		sk, err := loadSkillsFromDir(dir)
+		sk, probs, err := loadSkillsFromDir(dir)
 		if err != nil {
 			return err
 		}
+		problems = append(problems, probs...)
 		for _, candidate := range sk {
 			if previous, duplicate := byName[candidate.Name]; duplicate {
-				return fmt.Errorf("duplicate skill name %q: %s and %s", candidate.Name, previous, candidate.Path)
+				problems = append(problems, fmt.Errorf("duplicate skill name %q: %s is skipped, %s is used", candidate.Name, candidate.Path, previous))
+				continue
 			}
 			byName[candidate.Name] = candidate.Path
 			discovered = append(discovered, candidate)
@@ -94,99 +102,121 @@ func (m *Manager) LoadAll() error {
 
 	m.mu.Lock()
 	m.skills = discovered
+	m.problems = problems
 	m.mu.Unlock()
 	return nil
 }
 
-func loadSkillsFromDir(dir string) ([]*Skill, error) {
+// Problems lists the skills the last LoadAll skipped, and why.
+func (m *Manager) Problems() []error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]error(nil), m.problems...)
+}
+
+func loadSkillsFromDir(dir string) (loaded []*Skill, problems []error, err error) {
 	if dir == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	dirInfo, err := os.Lstat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("inspect skills dir: %w", err)
+		return nil, nil, fmt.Errorf("inspect skills dir: %w", err)
 	}
 	if dirInfo.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("skills dir is a symlink: %s", dir)
+		return nil, nil, fmt.Errorf("skills dir is a symlink: %s", dir)
 	}
 	if !dirInfo.IsDir() {
-		return nil, fmt.Errorf("skills path is not a directory: %s", dir)
+		return nil, nil, fmt.Errorf("skills path is not a directory: %s", dir)
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read skills dir: %w", err)
+		return nil, nil, fmt.Errorf("read skills dir: %w", err)
 	}
 
-	loaded := make([]*Skill, 0)
+	loaded = make([]*Skill, 0)
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		entryInfo, err := entry.Info()
+		skill, err := loadSkillEntry(dir, entry)
 		if err != nil {
-			return nil, fmt.Errorf("inspect skill entry %s: %w", filepath.Join(dir, entry.Name()), err)
-		}
-		if entryInfo.Mode()&os.ModeSymlink != 0 {
+			problems = append(problems, err)
 			continue
 		}
-
-		var candidatePaths []string
-		var fallbackName string
-		switch {
-		case entryInfo.IsDir():
-			candidatePaths = []string{
-				filepath.Join(dir, entry.Name(), "SKILL.md"),
-				filepath.Join(dir, entry.Name(), "skill.md"),
-			}
-			fallbackName = entry.Name()
-		case strings.HasSuffix(entry.Name(), ".md"):
-			candidatePaths = []string{filepath.Join(dir, entry.Name())}
-			fallbackName = strings.TrimSuffix(entry.Name(), ".md")
-		default:
-			continue
+		if skill != nil {
+			loaded = append(loaded, skill)
 		}
-
-		var data []byte
-		path := ""
-		for _, candidatePath := range candidatePaths {
-			data, err = os.ReadFile(candidatePath)
-			if err == nil {
-				path = candidatePath
-				break
-			}
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("read skill %s: %w", candidatePath, err)
-		}
-		if path == "" {
-			continue
-		}
-
-		if !utf8.Valid(data) {
-			return nil, fmt.Errorf("parse skill %s: content is not valid UTF-8", path)
-		}
-		skill, err := parseFrontmatter(string(data))
-		if err != nil {
-			return nil, fmt.Errorf("parse skill %s: %w", path, err)
-		}
-
-		skill.Path = path
-		if skill.Name == "" {
-			skill.Name = fallbackName
-		}
-		if err := validateSkillName(skill.Name); err != nil {
-			return nil, fmt.Errorf("parse skill %s: invalid skill name: %w", path, err)
-		}
-		loaded = append(loaded, skill)
 	}
 
-	return loaded, nil
+	return loaded, problems, nil
+}
+
+// loadSkillEntry loads the skill an entry of a skills dir holds. It returns
+// nil, nil for entries that are not skills (other files, symlinks, folders
+// without a SKILL.md).
+func loadSkillEntry(dir string, entry os.DirEntry) (*Skill, error) {
+	entryInfo, err := entry.Info()
+	if err != nil {
+		return nil, fmt.Errorf("inspect skill entry %s: %w", filepath.Join(dir, entry.Name()), err)
+	}
+	if entryInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, nil
+	}
+
+	var candidatePaths []string
+	var fallbackName string
+	switch {
+	case entryInfo.IsDir():
+		candidatePaths = []string{
+			filepath.Join(dir, entry.Name(), "SKILL.md"),
+			filepath.Join(dir, entry.Name(), "skill.md"),
+		}
+		fallbackName = entry.Name()
+	case strings.HasSuffix(entry.Name(), ".md"):
+		candidatePaths = []string{filepath.Join(dir, entry.Name())}
+		fallbackName = strings.TrimSuffix(entry.Name(), ".md")
+	default:
+		return nil, nil
+	}
+
+	var data []byte
+	path := ""
+	for _, candidatePath := range candidatePaths {
+		data, err = os.ReadFile(candidatePath)
+		if err == nil {
+			path = candidatePath
+			break
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		return nil, fmt.Errorf("read skill %s: %w", candidatePath, err)
+	}
+	if path == "" {
+		return nil, nil
+	}
+
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("parse skill %s: content is not valid UTF-8", path)
+	}
+	skill, err := parseFrontmatter(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse skill %s: %w", path, err)
+	}
+
+	skill.Path = path
+	if skill.Name == "" {
+		skill.Name = fallbackName
+	}
+	if err := validateSkillName(skill.Name); err != nil {
+		return nil, fmt.Errorf("parse skill %s: invalid skill name: %w", path, err)
+	}
+	return skill, nil
 }
 
 func parseFrontmatter(data string) (*Skill, error) {
